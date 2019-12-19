@@ -3,18 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Registry } from 'vs/platform/registry/common/platform';
-import { IViewContainersRegistry, ViewContainer, Extensions as ViewContainerExtensions } from 'vs/workbench/common/views';
 import { URI } from 'vs/base/common/uri';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import { Event } from 'vs/base/common/event';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { Command } from 'vs/editor/common/modes';
-import { ColorIdentifier } from 'vs/platform/theme/common/colorRegistry';
 import { ISequence } from 'vs/base/common/sequence';
+import { Extensions as ViewContainerExtensions, ViewContainer, IViewContainersRegistry, ViewContainerLocation } from 'vs/workbench/common/views';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { localize } from 'vs/nls';
 
 export const VIEWLET_ID = 'workbench.view.scm';
-export const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensions.ViewContainersRegistry).registerViewContainer(VIEWLET_ID);
+export const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensions.ViewContainersRegistry).registerViewContainer({ id: VIEWLET_ID, name: localize('source control', "Source Control"), }, ViewContainerLocation.Sidebar);
 
 export interface IBaselineResourceProvider {
 	getBaselineResource(resource: URI): Promise<URI>;
@@ -28,10 +28,6 @@ export interface ISCMResourceDecorations {
 	tooltip?: string;
 	strikeThrough?: boolean;
 	faded?: boolean;
-
-	source?: string;
-	letter?: string;
-	color?: ColorIdentifier;
 }
 
 export interface ISCMResource {
@@ -61,8 +57,8 @@ export interface ISCMProvider extends IDisposable {
 
 	readonly rootUri?: URI;
 	readonly count?: number;
-	readonly commitTemplate?: string;
-	readonly onDidChangeCommitTemplate?: Event<string>;
+	readonly commitTemplate: string;
+	readonly onDidChangeCommitTemplate: Event<string>;
 	readonly onDidChangeStatusBarCommands?: Event<Command[]>;
 	readonly acceptInputCommand?: Command;
 	readonly statusBarCommands?: Command[];
@@ -112,7 +108,7 @@ export interface ISCMRepository extends IDisposable {
 
 export interface ISCMService {
 
-	readonly _serviceBrand: any;
+	readonly _serviceBrand: undefined;
 	readonly onDidAddRepository: Event<ISCMRepository>;
 	readonly onDidRemoveRepository: Event<ISCMRepository>;
 

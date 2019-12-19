@@ -26,11 +26,12 @@ vscode can be packaged for: `win32-ia32 | win32-x64 | darwin | linux-ia32 | linu
   - `vscode-[platform]-min`: Builds a packaged and minified version for [platform]
     - Note: may need to add `--max-old-space-size=6500` to limit the memory used in packaging, my computer crashed a few times trying to package without that flag
 
-- [Microsoft Documentation for Cross Compiling Debian Based Linux](https://github.com/Microsoft/vscode/wiki/Cross-Compiling-for-Debian-Based-Linux)
+Many of the core components and extensions to VS Code live in their own repositories on GitHub. For example, the [node debug adapter](https://github.com/microsoft/vscode-node-debug) and the [mono debug adapter](https://github.com/microsoft/vscode-mono-debug) have their own repositories. For a complete list, please visit the [Related Projects](https://github.com/Microsoft/vscode/wiki/Related-Projects) page on our [wiki](https://github.com/Microsoft/vscode/wiki).
 
 Example: Packaging for Arch Linux:
 - `vscode-linux-x64-min`
 
+VS Code includes a set of built-in extensions located in the [extensions](extensions) folder, including grammars and snippets for many languages. Extensions that provide rich language support (code completion, Go to Definition) for a language have the suffix `language-features`. For example, the `json` extension provides coloring for `JSON` and the `json-language-features` provides rich language support for `JSON`.
 
 ## Current Transparent Themes
 - dark vs, dark plus

@@ -52,10 +52,21 @@ export class ExtHostTreeViews implements ExtHostTreeViewsShape {
 		private commands: ExtHostCommands,
 		private logService: ILogService
 	) {
+
+		function isTreeViewItemHandleArg(arg: any): boolean {
+			return arg && arg.$treeViewId && arg.$treeItemHandle;
+		}
 		commands.registerArgumentProcessor({
 			processArgument: arg => {
-				if (arg && arg.$treeViewId && arg.$treeItemHandle) {
+				if (isTreeViewItemHandleArg(arg)) {
 					return this.convertArgument(arg);
+				} else if (Array.isArray(arg) && (arg.length > 0)) {
+					return arg.map(item => {
+						if (isTreeViewItemHandleArg(item)) {
+							return this.convertArgument(item);
+						}
+						return item;
+					});
 				}
 				return arg;
 			}
@@ -82,8 +93,11 @@ export class ExtHostTreeViews implements ExtHostTreeViewsShape {
 			get onDidChangeVisibility() { return treeView.onDidChangeVisibility; },
 			get message() { return treeView.message; },
 			set message(message: string) {
-				checkProposedApiEnabled(extension);
 				treeView.message = message;
+			},
+			get title() { return treeView.title; },
+			set title(title: string) {
+				treeView.title = title;
 			},
 			reveal: (element: T, options?: IRevealOptions): Promise<void> => {
 				return treeView.reveal(element, options);
@@ -150,8 +164,8 @@ interface TreeNode extends IDisposable {
 
 class ExtHostTreeView<T> extends Disposable {
 
-	private static LABEL_HANDLE_PREFIX = '0';
-	private static ID_HANDLE_PREFIX = '1';
+	private static readonly LABEL_HANDLE_PREFIX = '0';
+	private static readonly ID_HANDLE_PREFIX = '1';
 
 	private readonly dataProvider: vscode.TreeDataProvider<T>;
 
@@ -182,10 +196,25 @@ class ExtHostTreeView<T> extends Disposable {
 	private refreshPromise: Promise<void> = Promise.resolve();
 	private refreshQueue: Promise<void> = Promise.resolve();
 
-	constructor(private viewId: string, options: vscode.TreeViewOptions<T>, private proxy: MainThreadTreeViewsShape, private commands: CommandsConverter, private logService: ILogService, private extension: IExtensionDescription) {
+	constructor(
+		private viewId: string, options: vscode.TreeViewOptions<T>,
+		private proxy: MainThreadTreeViewsShape,
+		private commands: CommandsConverter,
+		private logService: ILogService,
+		private extension: IExtensionDescription
+	) {
 		super();
+		if (extension.contributes && extension.contributes.views) {
+			for (const location in extension.contributes.views) {
+				for (const view of extension.contributes.views[location]) {
+					if (view.id === viewId) {
+						this._title = view.name;
+					}
+				}
+			}
+		}
 		this.dataProvider = options.treeDataProvider;
-		this.proxy.$registerTreeViewDataProvider(viewId, { showCollapseAll: !!options.showCollapseAll });
+		this.proxy.$registerTreeViewDataProvider(viewId, { showCollapseAll: !!options.showCollapseAll, canSelectMany: !!options.canSelectMany });
 		if (this.dataProvider.onDidChangeTreeData) {
 			this._register(this.dataProvider.onDidChangeTreeData(element => this._onDidChangeData.fire({ message: false, element })));
 		}
@@ -225,7 +254,7 @@ class ExtHostTreeView<T> extends Disposable {
 	getChildren(parentHandle: TreeItemHandle | Root): Promise<ITreeItem[]> {
 		const parentElement = parentHandle ? this.getExtensionElement(parentHandle) : undefined;
 		if (parentHandle && !parentElement) {
-			console.error(`No tree item with id \'${parentHandle}\' found.`);
+			this.logService.error(`No tree item with id \'${parentHandle}\' found.`);
 			return Promise.resolve([]);
 		}
 
@@ -261,6 +290,16 @@ class ExtHostTreeView<T> extends Disposable {
 	set message(message: string) {
 		this._message = message;
 		this._onDidChangeData.fire({ message: true, element: false });
+	}
+
+	private _title: string = '';
+	get title(): string {
+		return this._title;
+	}
+
+	set title(title: string) {
+		this._title = title;
+		this.proxy.$setTitle(this.viewId, title);
 	}
 
 	setExpanded(treeItemHandle: TreeItemHandle, expanded: boolean): void {
@@ -380,7 +419,7 @@ class ExtHostTreeView<T> extends Disposable {
 				// check if an ancestor of extElement is already in the elements to update list
 				let currentNode: TreeNode | undefined = elementNode;
 				while (currentNode && currentNode.parent && !elementsToUpdate.has(currentNode.parent.item.handle)) {
-					const parentElement = this.elements.get(currentNode.parent.item.handle);
+					const parentElement: T | undefined = this.elements.get(currentNode.parent.item.handle);
 					currentNode = parentElement ? this.nodes.get(parentElement) : undefined;
 				}
 				if (currentNode && !currentNode.parent) {
@@ -505,7 +544,7 @@ class ExtHostTreeView<T> extends Disposable {
 	private getLightIconPath(extensionTreeItem: vscode.TreeItem): URI | undefined {
 		if (extensionTreeItem.iconPath && !(extensionTreeItem.iconPath instanceof ThemeIcon)) {
 			if (typeof extensionTreeItem.iconPath === 'string'
-				|| extensionTreeItem.iconPath instanceof URI) {
+				|| URI.isUri(extensionTreeItem.iconPath)) {
 				return this.getIconPath(extensionTreeItem.iconPath);
 			}
 			return this.getIconPath((<{ light: string | URI; dark: string | URI }>extensionTreeItem.iconPath).light);
@@ -521,7 +560,7 @@ class ExtHostTreeView<T> extends Disposable {
 	}
 
 	private getIconPath(iconPath: string | URI): URI {
-		if (iconPath instanceof URI) {
+		if (URI.isUri(iconPath)) {
 			return iconPath;
 		}
 		return URI.file(iconPath);

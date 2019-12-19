@@ -17,7 +17,7 @@ import { TelemetryService } from 'vs/platform/telemetry/common/telemetryService'
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { memoize } from 'vs/base/common/decorators';
 import { TaskDefinitionRegistry } from 'vs/workbench/contrib/tasks/common/taskDefinitionRegistry';
-import { ITextResourcePropertiesService } from 'vs/editor/common/services/resourceConfiguration';
+import { ITextResourcePropertiesService } from 'vs/editor/common/services/textResourceConfigurationService';
 import { URI } from 'vs/base/common/uri';
 import { Schemas } from 'vs/base/common/network';
 import { isDebuggerMainContribution } from 'vs/workbench/contrib/debug/common/debugUtils';
@@ -236,16 +236,18 @@ export class Debugger implements IDebugger {
 			};
 			properties['preLaunchTask'] = {
 				anyOf: [taskSchema, {
-					type: ['string', 'null'],
+					type: ['string']
 				}],
 				default: '',
+				defaultSnippets: [{ body: { task: '', type: '' } }],
 				description: nls.localize('debugPrelaunchTask', "Task to run before debug session starts.")
 			};
 			properties['postDebugTask'] = {
 				anyOf: [taskSchema, {
-					type: ['string', 'null'],
+					type: ['string'],
 				}],
 				default: '',
+				defaultSnippets: [{ body: { task: '', type: '' } }],
 				description: nls.localize('debugPostDebugTask', "Task to run after debug session ends.")
 			};
 			properties['internalConsoleOptions'] = INTERNAL_CONSOLE_OPTIONS_SCHEMA;

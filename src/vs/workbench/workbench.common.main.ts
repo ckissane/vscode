@@ -15,11 +15,16 @@ import 'vs/workbench/browser/workbench.contribution';
 
 //#region --- workbench actions
 
-import 'vs/workbench/browser/actions/layoutActions';
-import 'vs/workbench/browser/actions/windowActions';
+import 'vs/workbench/browser/actions/textInputActions';
 import 'vs/workbench/browser/actions/developerActions';
+import 'vs/workbench/browser/actions/helpActions';
+import 'vs/workbench/browser/actions/layoutActions';
 import 'vs/workbench/browser/actions/listCommands';
 import 'vs/workbench/browser/actions/navigationActions';
+import 'vs/workbench/browser/actions/windowActions';
+import 'vs/workbench/browser/actions/workspaceActions';
+import 'vs/workbench/browser/actions/workspaceCommands';
+
 import 'vs/workbench/browser/parts/quickopen/quickOpenActions';
 import 'vs/workbench/browser/parts/quickinput/quickInputActions';
 
@@ -52,6 +57,7 @@ import 'vs/workbench/browser/parts/views/views';
 
 //#region --- workbench services
 
+import 'vs/workbench/services/extensions/browser/extensionUrlHandler';
 import 'vs/workbench/services/bulkEdit/browser/bulkEditService';
 import 'vs/workbench/services/keybinding/common/keybindingEditing';
 import 'vs/workbench/services/decorations/browser/decorationsService';
@@ -60,12 +66,11 @@ import 'vs/workbench/services/editor/browser/codeEditorService';
 import 'vs/workbench/services/preferences/browser/preferencesService';
 import 'vs/workbench/services/configuration/common/jsonEditingService';
 import 'vs/workbench/services/textmodelResolver/common/textModelResolverService';
-import 'vs/workbench/services/dialogs/browser/fileDialogService';
 import 'vs/workbench/services/editor/browser/editorService';
 import 'vs/workbench/services/history/browser/history';
 import 'vs/workbench/services/activity/browser/activityService';
 import 'vs/workbench/services/keybinding/browser/keybindingService';
-import 'vs/workbench/services/untitled/common/untitledEditorService';
+import 'vs/workbench/services/untitled/common/untitledTextEditorService';
 import 'vs/workbench/services/textfile/common/textResourcePropertiesService';
 import 'vs/workbench/services/mode/common/workbenchModeService';
 import 'vs/workbench/services/commands/common/commandService';
@@ -73,6 +78,12 @@ import 'vs/workbench/services/themes/browser/workbenchThemeService';
 import 'vs/workbench/services/label/common/labelService';
 import 'vs/workbench/services/extensionManagement/common/extensionEnablementService';
 import 'vs/workbench/services/notification/common/notificationService';
+import 'vs/workbench/services/extensions/common/staticExtensions';
+import 'vs/workbench/services/userDataSync/common/userDataSyncUtil';
+import 'vs/workbench/services/path/common/remotePathService';
+import 'vs/workbench/services/remote/common/remoteExplorerService';
+import 'vs/workbench/services/workingCopy/common/workingCopyService';
+import 'vs/workbench/services/filesConfiguration/common/filesConfigurationService';
 
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
 import { ExtensionGalleryService } from 'vs/platform/extensionManagement/common/extensionGalleryService';
@@ -80,8 +91,6 @@ import { IExtensionGalleryService } from 'vs/platform/extensionManagement/common
 import { ContextViewService } from 'vs/platform/contextview/browser/contextViewService';
 import { IContextViewService } from 'vs/platform/contextview/browser/contextView';
 import { IListService, ListService } from 'vs/platform/list/browser/listService';
-import { OpenerService } from 'vs/editor/browser/services/openerService';
-import { IOpenerService } from 'vs/platform/opener/common/opener';
 import { IEditorWorkerService } from 'vs/editor/common/services/editorWorkerService';
 import { EditorWorkerServiceImpl } from 'vs/editor/common/services/editorWorkerServiceImpl';
 import { MarkerDecorationsService } from 'vs/editor/common/services/markerDecorationsServiceImpl';
@@ -92,17 +101,18 @@ import { ContextKeyService } from 'vs/platform/contextkey/browser/contextKeyServ
 import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IModelService } from 'vs/editor/common/services/modelService';
 import { ModelServiceImpl } from 'vs/editor/common/services/modelServiceImpl';
-import { ITextResourceConfigurationService } from 'vs/editor/common/services/resourceConfiguration';
-import { TextResourceConfigurationService } from 'vs/editor/common/services/resourceConfigurationImpl';
+import { ITextResourceConfigurationService } from 'vs/editor/common/services/textResourceConfigurationService';
+import { TextResourceConfigurationService } from 'vs/editor/common/services/textResourceConfigurationServiceImpl';
 import { IMenuService } from 'vs/platform/actions/common/actions';
 import { MenuService } from 'vs/platform/actions/common/menuService';
 import { IDownloadService } from 'vs/platform/download/common/download';
 import { DownloadService } from 'vs/platform/download/common/downloadService';
+import { OpenerService } from 'vs/editor/browser/services/openerService';
+import { IOpenerService } from 'vs/platform/opener/common/opener';
 
 registerSingleton(IExtensionGalleryService, ExtensionGalleryService, true);
 registerSingleton(IContextViewService, ContextViewService, true);
 registerSingleton(IListService, ListService, true);
-registerSingleton(IOpenerService, OpenerService, true);
 registerSingleton(IEditorWorkerService, EditorWorkerServiceImpl);
 registerSingleton(IMarkerDecorationsService, MarkerDecorationsService);
 registerSingleton(IMarkerService, MarkerService, true);
@@ -111,14 +121,12 @@ registerSingleton(IModelService, ModelServiceImpl, true);
 registerSingleton(ITextResourceConfigurationService, TextResourceConfigurationService);
 registerSingleton(IMenuService, MenuService, true);
 registerSingleton(IDownloadService, DownloadService, true);
+registerSingleton(IOpenerService, OpenerService, true);
 
 //#endregion
 
 
 //#region --- workbench contributions
-
-// Workspace File Watching
-import 'vs/workbench/services/files/common/workspaceWatcher';
 
 // Telemetry
 import 'vs/workbench/contrib/telemetry/browser/telemetry.contribution';
@@ -126,9 +134,7 @@ import 'vs/workbench/contrib/telemetry/browser/telemetry.contribution';
 // Preferences
 import 'vs/workbench/contrib/preferences/browser/preferences.contribution';
 import 'vs/workbench/contrib/preferences/browser/keybindingsEditorContribution';
-import { IPreferencesSearchService } from 'vs/workbench/contrib/preferences/common/preferences';
-import { PreferencesSearchService } from 'vs/workbench/contrib/preferences/browser/preferencesSearch';
-registerSingleton(IPreferencesSearchService, PreferencesSearchService, true);
+import 'vs/workbench/contrib/preferences/browser/preferencesSearch';
 
 // Logs
 import 'vs/workbench/contrib/logs/common/logs.contribution';
@@ -157,6 +163,8 @@ import 'vs/workbench/contrib/scm/browser/scmViewlet';
 import 'vs/workbench/contrib/debug/browser/debug.contribution';
 import 'vs/workbench/contrib/debug/browser/debugQuickOpen';
 import 'vs/workbench/contrib/debug/browser/debugEditorContribution';
+import 'vs/workbench/contrib/debug/browser/breakpointEditorContribution';
+import 'vs/workbench/contrib/debug/browser/callStackEditorContribution';
 import 'vs/workbench/contrib/debug/browser/repl';
 import 'vs/workbench/contrib/debug/browser/debugViewlet';
 
@@ -171,6 +179,7 @@ import 'vs/workbench/contrib/url/common/url.contribution';
 
 // Webview
 import 'vs/workbench/contrib/webview/browser/webview.contribution';
+import 'vs/workbench/contrib/customEditor/browser/webviewEditor.contribution';
 
 // Extensions Management
 import 'vs/workbench/contrib/extensions/browser/extensions.contribution';
@@ -187,13 +196,14 @@ import 'vs/workbench/contrib/terminal/browser/terminalQuickOpen';
 import 'vs/workbench/contrib/terminal/browser/terminalPanel';
 
 // Relauncher
-import 'vs/workbench/contrib/relauncher/common/relauncher.contribution';
+import 'vs/workbench/contrib/relauncher/browser/relauncher.contribution';
 
 // Tasks
 import 'vs/workbench/contrib/tasks/browser/task.contribution';
 
 // Remote
 import 'vs/workbench/contrib/remote/common/remote.contribution';
+import 'vs/workbench/contrib/remote/browser/remote';
 
 // Emmet
 import 'vs/workbench/contrib/emmet/browser/emmet.contribution';
@@ -217,17 +227,37 @@ import 'vs/workbench/contrib/format/browser/format.contribution';
 // Themes
 import 'vs/workbench/contrib/themes/browser/themes.contribution';
 
+// Update
+import 'vs/workbench/contrib/update/browser/update.contribution';
+
 // Watermark
 import 'vs/workbench/contrib/watermark/browser/watermark';
 
+// Surveys
+import 'vs/workbench/contrib/surveys/browser/nps.contribution';
+import 'vs/workbench/contrib/surveys/browser/languageSurveys.contribution';
+
 // Welcome
-import 'vs/workbench/contrib/welcome/walkThrough/browser/walkThrough.contribution';
 import 'vs/workbench/contrib/welcome/overlay/browser/welcomeOverlay';
+import 'vs/workbench/contrib/welcome/page/browser/welcomePage.contribution';
+import 'vs/workbench/contrib/welcome/walkThrough/browser/walkThrough.contribution';
 
 // Call Hierarchy
 import 'vs/workbench/contrib/callHierarchy/browser/callHierarchy.contribution';
 
 // Outline
 import 'vs/workbench/contrib/outline/browser/outline.contribution';
+
+// Experiments
+import 'vs/workbench/contrib/experiments/browser/experiments.contribution';
+
+// Send a Smile
+import 'vs/workbench/contrib/feedback/browser/feedback.contribution';
+
+// User Data Sync
+import 'vs/workbench/contrib/userDataSync/browser/userDataSync.contribution';
+
+// Code Actions
+import 'vs/workbench/contrib/codeActions/common/codeActions.contribution';
 
 //#endregion

@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from 'vs/base/common/event';
-import { createDecorator, ServiceIdentifier, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
-import { IEditorInput, IEditor, GroupIdentifier, IEditorInputWithOptions, CloseDirection, IEditorPartOptions } from 'vs/workbench/common/editor';
-import { IEditorOptions, ITextEditorOptions } from 'vs/platform/editor/common/editor';
+import { createDecorator, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
+import { IEditorInput, IEditor, GroupIdentifier, IEditorInputWithOptions, CloseDirection, IEditorPartOptions, IEditorPartOptionsChangeEvent } from 'vs/workbench/common/editor';
+import { IEditorOptions, ITextEditorOptions, IResourceInput } from 'vs/platform/editor/common/editor';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IVisibleEditor } from 'vs/workbench/services/editor/common/editorService';
 import { IDimension } from 'vs/editor/common/editorCommon';
@@ -149,7 +149,7 @@ export const enum EditorsOrder {
 
 export interface IEditorGroupsService {
 
-	_serviceBrand: ServiceIdentifier<any>;
+	_serviceBrand: undefined;
 
 	/**
 	 * An event for when the active editor group changes. The active editor
@@ -345,6 +345,11 @@ export interface IEditorGroupsService {
 	readonly partOptions: IEditorPartOptions;
 
 	/**
+	 * An event that notifies when editor part options change.
+	 */
+	readonly onDidEditorPartOptionsChange: Event<IEditorPartOptionsChangeEvent>;
+
+	/**
 	 * Enforce editor part options temporarily.
 	 */
 	enforcePartOptions(options: IEditorPartOptions): IDisposable;
@@ -378,6 +383,11 @@ export interface IEditorGroup {
 	 * An aggregated event for when the group changes in any way.
 	 */
 	readonly onDidGroupChange: Event<IGroupChangeEvent>;
+
+	/**
+	 * An event that is fired when the group gets disposed.
+	 */
+	readonly onWillDispose: Event<void>;
 
 	/**
 	 * A unique identifier of this group that remains identical even if the
@@ -428,16 +438,16 @@ export interface IEditorGroup {
 	readonly editors: ReadonlyArray<IEditorInput>;
 
 	/**
-	 * Returns the editor at a specific index of the group.
-	 */
-	getEditor(index: number): IEditorInput | undefined;
-
-	/**
 	 * Get all editors that are currently opened in the group optionally
 	 * sorted by being most recent active. Will sort by sequential appearance
 	 * by default (from left to right).
 	 */
 	getEditors(order?: EditorsOrder): ReadonlyArray<IEditorInput>;
+
+	/**
+	 * Returns the editor at a specific index of the group.
+	 */
+	getEditorByIndex(index: number): IEditorInput | undefined;
 
 	/**
 	 * Returns the index of the editor in the group or -1 if not opened.
@@ -467,7 +477,7 @@ export interface IEditorGroup {
 	 *
 	 * Note: An editor can be opened but not actively visible.
 	 */
-	isOpened(editor: IEditorInput): boolean;
+	isOpened(editor: IEditorInput | IResourceInput): boolean;
 
 	/**
 	 * Find out if the provided editor is pinned in the group.

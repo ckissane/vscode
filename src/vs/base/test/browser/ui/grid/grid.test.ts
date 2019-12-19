@@ -7,8 +7,10 @@ import * as assert from 'assert';
 import { Direction, getRelativeLocation, Orientation, SerializableGrid, ISerializableView, IViewDeserializer, GridNode, Sizing, isGridBranchNode, sanitizeGridNodeDescriptor, GridNodeDescriptor, createSerializedGrid, Grid } from 'vs/base/browser/ui/grid/grid';
 import { TestView, nodesToArrays } from './util';
 import { deepClone } from 'vs/base/common/objects';
+import { Event } from 'vs/base/common/event';
 
 // Simple example:
+//
 //  +-----+---------------+
 //  |  4  |      2        |
 //  +-----+---------+-----+
@@ -16,6 +18,16 @@ import { deepClone } from 'vs/base/common/objects';
 //  +---------------+  3  |
 //  |        5      |     |
 //  +---------------+-----+
+//
+//  V
+//  +-H
+//  | +-4
+//  | +-2
+//  +-H
+//    +-V
+//    | +-1
+//    | +-5
+//    +-3
 
 suite('Grid', function () {
 	let container: HTMLElement;
@@ -511,7 +523,8 @@ suite('SerializableGrid', function () {
 		container.appendChild(grid.element);
 		grid.layout(800, 600);
 
-		assert.deepEqual(grid.serialize(), {
+		const actual = grid.serialize();
+		assert.deepEqual(actual, {
 			orientation: 0,
 			width: 800,
 			height: 600,
@@ -676,10 +689,10 @@ suite('SerializableGrid', function () {
 
 		grid2.layout(400, 800); // [/2, *4/3]
 		assert.deepEqual(view1Copy.size, [300, 400]);
-		assert.deepEqual(view2Copy.size, [300, 266]);
-		assert.deepEqual(view3Copy.size, [100, 534]);
-		assert.deepEqual(view4Copy.size, [100, 266]);
-		assert.deepEqual(view5Copy.size, [300, 134]);
+		assert.deepEqual(view2Copy.size, [300, 267]);
+		assert.deepEqual(view3Copy.size, [100, 533]);
+		assert.deepEqual(view4Copy.size, [100, 267]);
+		assert.deepEqual(view5Copy.size, [300, 133]);
 	});
 
 	test('deserialize 4 view layout (ben issue #2)', function () {
@@ -774,7 +787,7 @@ suite('SerializableGrid', function () {
 	test('sanitizeGridNodeDescriptor', () => {
 		const nodeDescriptor = { groups: [{ size: 0.2 }, { size: 0.2 }, { size: 0.6, groups: [{}, {}] }] };
 		const nodeDescriptorCopy = deepClone<GridNodeDescriptor>(nodeDescriptor);
-		sanitizeGridNodeDescriptor(nodeDescriptorCopy);
+		sanitizeGridNodeDescriptor(nodeDescriptorCopy, true);
 		assert.deepEqual(nodeDescriptorCopy, { groups: [{ size: 0.2 }, { size: 0.2 }, { size: 0.6, groups: [{ size: 0.5 }, { size: 0.5 }] }] });
 	});
 
@@ -800,6 +813,33 @@ suite('SerializableGrid', function () {
 			width: 1,
 			height: 1
 		});
+	});
+
+	test('createSerializedGrid - issue #85601, should not allow single children groups', () => {
+		const serializedGrid = createSerializedGrid({ orientation: Orientation.HORIZONTAL, groups: [{ groups: [{}, {}], size: 0.5 }, { groups: [{}], size: 0.5 }] });
+		const views: ISerializableView[] = [];
+		const deserializer = new class implements IViewDeserializer<ISerializableView> {
+			fromJSON(): ISerializableView {
+				const view: ISerializableView = {
+					element: document.createElement('div'),
+					layout: () => null,
+					minimumWidth: 0,
+					maximumWidth: Number.POSITIVE_INFINITY,
+					minimumHeight: 0,
+					maximumHeight: Number.POSITIVE_INFINITY,
+					onDidChange: Event.None,
+					toJSON: () => ({})
+				};
+				views.push(view);
+				return view;
+			}
+		};
+
+		const grid = SerializableGrid.deserialize(serializedGrid, deserializer);
+		assert.equal(views.length, 3);
+
+		// should not throw
+		grid.removeView(views[2]);
 	});
 
 	test('serialize should store visibility and previous size', function () {

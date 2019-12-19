@@ -18,11 +18,12 @@ import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { optional } from 'vs/platform/instantiation/common/instantiation';
 import { Choice, Placeholder, SnippetParser, Text, TextmateSnippet, Marker } from './snippetParser';
-import { ClipboardBasedVariableResolver, CompositeSnippetVariableResolver, ModelBasedVariableResolver, SelectionBasedVariableResolver, TimeBasedVariableResolver, CommentBasedVariableResolver, WorkspaceBasedVariableResolver } from './snippetVariables';
+import { ClipboardBasedVariableResolver, CompositeSnippetVariableResolver, ModelBasedVariableResolver, SelectionBasedVariableResolver, TimeBasedVariableResolver, CommentBasedVariableResolver, WorkspaceBasedVariableResolver, RandomBasedVariableResolver } from './snippetVariables';
 import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
 import * as colors from 'vs/platform/theme/common/colorRegistry';
 import { withNullAsUndefined } from 'vs/base/common/types';
 import { ILabelService } from 'vs/platform/label/common/label';
+import { EditorOption } from 'vs/editor/common/config/editorOptions';
 
 registerThemingParticipant((theme, collector) => {
 
@@ -332,7 +333,7 @@ const _defaultOptions: ISnippetSessionInsertOptions = {
 
 export class SnippetSession {
 
-	static adjustWhitespace(model: ITextModel, position: IPosition, snippet: TextmateSnippet): void {
+	static adjustWhitespace(model: ITextModel, position: IPosition, snippet: TextmateSnippet, adjustIndentation: boolean, adjustNewlines: boolean): void {
 		const line = model.getLineContent(position.lineNumber);
 		const lineLeadingWhitespace = getLeadingWhitespace(line, 0, position.column - 1);
 
@@ -341,13 +342,19 @@ export class SnippetSession {
 				// adjust indentation of text markers, except for choise elements
 				// which get adjusted when being selected
 				const lines = marker.value.split(/\r\n|\r|\n/);
-				for (let i = 1; i < lines.length; i++) {
-					let templateLeadingWhitespace = getLeadingWhitespace(lines[i]);
-					lines[i] = model.normalizeIndentation(lineLeadingWhitespace + templateLeadingWhitespace) + lines[i].substr(templateLeadingWhitespace.length);
+
+				if (adjustIndentation) {
+					for (let i = 1; i < lines.length; i++) {
+						let templateLeadingWhitespace = getLeadingWhitespace(lines[i]);
+						lines[i] = model.normalizeIndentation(lineLeadingWhitespace + templateLeadingWhitespace) + lines[i].substr(templateLeadingWhitespace.length);
+					}
 				}
-				const newValue = lines.join(model.getEOL());
-				if (newValue !== marker.value) {
-					marker.parent.replace(marker, [new Text(newValue)]);
+
+				if (adjustNewlines) {
+					const newValue = lines.join(model.getEOL());
+					if (newValue !== marker.value) {
+						marker.parent.replace(marker, [new Text(newValue)]);
+					}
 				}
 			}
 			return true;
@@ -391,7 +398,7 @@ export class SnippetSession {
 		const modelBasedVariableResolver = editor.invokeWithinContext(accessor => new ModelBasedVariableResolver(accessor.get(ILabelService, optional), model));
 
 		const clipboardService = editor.invokeWithinContext(accessor => accessor.get(IClipboardService, optional));
-		clipboardText = clipboardText || clipboardService && clipboardService.readTextSync();
+		const readClipboardText = () => clipboardText || clipboardService && clipboardService.readTextSync();
 
 		let delta = 0;
 
@@ -438,17 +445,20 @@ export class SnippetSession {
 			// happens when being asked for (default) or when this is a secondary
 			// cursor and the leading whitespace is different
 			const start = snippetSelection.getStartPosition();
-			if (adjustWhitespace || (idx > 0 && firstLineFirstNonWhitespace !== model.getLineFirstNonWhitespaceColumn(selection.positionLineNumber))) {
-				SnippetSession.adjustWhitespace(model, start, snippet);
-			}
+			SnippetSession.adjustWhitespace(
+				model, start, snippet,
+				adjustWhitespace || (idx > 0 && firstLineFirstNonWhitespace !== model.getLineFirstNonWhitespaceColumn(selection.positionLineNumber)),
+				true
+			);
 
 			snippet.resolveVariables(new CompositeSnippetVariableResolver([
 				modelBasedVariableResolver,
-				new ClipboardBasedVariableResolver(clipboardText, idx, indexedSelections.length),
+				new ClipboardBasedVariableResolver(readClipboardText, idx, indexedSelections.length, editor.getOption(EditorOption.multiCursorPaste) === 'spread'),
 				new SelectionBasedVariableResolver(model, selection),
 				new CommentBasedVariableResolver(model),
 				new TimeBasedVariableResolver,
 				new WorkspaceBasedVariableResolver(workspaceService),
+				new RandomBasedVariableResolver,
 			]));
 
 			const offset = model.getOffsetAt(start) + delta;
@@ -489,21 +499,18 @@ export class SnippetSession {
 			return;
 		}
 
-		const model = this._editor.getModel();
-
 		// make insert edit and start with first selections
 		const { edits, snippets } = SnippetSession.createEditsAndSnippets(this._editor, this._template, this._options.overwriteBefore, this._options.overwriteAfter, false, this._options.adjustWhitespace, this._options.clipboardText);
 		this._snippets = snippets;
 
-		const selections = model.pushEditOperations(this._editor.getSelections(), edits, undoEdits => {
+		this._editor.executeEdits('snippet', edits, undoEdits => {
 			if (this._snippets[0].hasPlaceholder) {
 				return this._move(true);
 			} else {
 				return undoEdits.map(edit => Selection.fromPositions(edit.range.getEndPosition()));
 			}
-		})!;
-		this._editor.setSelections(selections);
-		this._editor.revealRange(selections[0]);
+		});
+		this._editor.revealRange(this._editor.getSelections()[0]);
 	}
 
 	merge(template: string, options: ISnippetSessionInsertOptions = _defaultOptions): void {
@@ -513,8 +520,7 @@ export class SnippetSession {
 		this._templateMerges.push([this._snippets[0]._nestingLevel, this._snippets[0]._placeholderGroupsIdx, template]);
 		const { edits, snippets } = SnippetSession.createEditsAndSnippets(this._editor, template, options.overwriteBefore, options.overwriteAfter, true, options.adjustWhitespace, options.clipboardText);
 
-		this._editor.setSelections(this._editor.getModel().pushEditOperations(this._editor.getSelections(), edits, undoEdits => {
-
+		this._editor.executeEdits('snippet', edits, undoEdits => {
 			for (const snippet of this._snippets) {
 				snippet.merge(snippets);
 			}
@@ -525,7 +531,7 @@ export class SnippetSession {
 			} else {
 				return undoEdits.map(edit => Selection.fromPositions(edit.range.getEndPosition()));
 			}
-		})!);
+		});
 	}
 
 	next(): void {

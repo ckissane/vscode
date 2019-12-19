@@ -5,18 +5,19 @@
 
 import * as platform from 'vs/base/common/platform';
 import * as terminalEnvironment from 'vs/workbench/contrib/terminal/common/terminalEnvironment';
+import { env as processEnv } from 'vs/base/common/process';
 import { ProcessState, ITerminalProcessManager, IShellLaunchConfig, ITerminalConfigHelper, ITerminalChildProcess, IBeforeProcessDataEvent, ITerminalEnvironment, ITerminalDimensions } from 'vs/workbench/contrib/terminal/common/terminal';
 import { ILogService } from 'vs/platform/log/common/log';
 import { Emitter, Event } from 'vs/base/common/event';
 import { IHistoryService } from 'vs/workbench/services/history/common/history';
-import { TerminalProcessExtHostProxy } from 'vs/workbench/contrib/terminal/common/terminalProcessExtHostProxy';
+import { TerminalProcessExtHostProxy } from 'vs/workbench/contrib/terminal/browser/terminalProcessExtHostProxy';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { IConfigurationResolverService } from 'vs/workbench/services/configurationResolver/common/configurationResolver';
 import { Schemas } from 'vs/base/common/network';
 import { getRemoteAuthority } from 'vs/platform/remote/common/remoteHosts';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
-import { IProductService } from 'vs/platform/product/common/product';
+import { IProductService } from 'vs/platform/product/common/productService';
 import { ITerminalInstanceService } from 'vs/workbench/contrib/terminal/browser/terminal';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IRemoteAgentService } from 'vs/workbench/services/remote/common/remoteAgentService';
@@ -66,8 +67,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 	public get onProcessData(): Event<string> { return this._onProcessData.event; }
 	private readonly _onProcessTitle = this._register(new Emitter<string>());
 	public get onProcessTitle(): Event<string> { return this._onProcessTitle.event; }
-	private readonly _onProcessExit = this._register(new Emitter<number>());
-	public get onProcessExit(): Event<number> { return this._onProcessExit.event; }
+	private readonly _onProcessExit = this._register(new Emitter<number | undefined>());
+	public get onProcessExit(): Event<number | undefined> { return this._onProcessExit.event; }
 	private readonly _onProcessOverrideDimensions = this._register(new Emitter<ITerminalDimensions | undefined>());
 	public get onProcessOverrideDimensions(): Event<ITerminalDimensions | undefined> { return this._onProcessOverrideDimensions.event; }
 	private readonly _onProcessOverrideShellLaunchConfig = this._register(new Emitter<IShellLaunchConfig>());
@@ -225,8 +226,8 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 		const envFromConfigValue = this._workspaceConfigurationService.inspect<ITerminalEnvironment | undefined>(`terminal.integrated.env.${platformKey}`);
 		const isWorkspaceShellAllowed = this._configHelper.checkWorkspaceShellPermissions();
 		this._configHelper.showRecommendations(shellLaunchConfig);
-		const baseEnv = this._configHelper.config.inheritEnv ? process.env as platform.IProcessEnvironment : await this._terminalInstanceService.getMainProcessParentEnv();
-		const env = terminalEnvironment.createTerminalEnvironment(shellLaunchConfig, lastActiveWorkspace, envFromConfigValue, this._configurationResolverService, isWorkspaceShellAllowed, this._productService.version, this._configHelper.config.setLocaleVariables, baseEnv);
+		const baseEnv = this._configHelper.config.inheritEnv ? processEnv : await this._terminalInstanceService.getMainProcessParentEnv();
+		const env = terminalEnvironment.createTerminalEnvironment(shellLaunchConfig, lastActiveWorkspace, envFromConfigValue, this._configurationResolverService, isWorkspaceShellAllowed, this._productService.version, this._configHelper.config.detectLocale, baseEnv);
 
 		const useConpty = this._configHelper.config.windowsEnableConpty && !isScreenReaderModeEnabled;
 		return this._terminalInstanceService.createTerminalProcess(shellLaunchConfig, initialCwd, cols, rows, env, useConpty);
@@ -284,7 +285,7 @@ export class TerminalProcessManager extends Disposable implements ITerminalProce
 		return Promise.resolve(this._latency);
 	}
 
-	private _onExit(exitCode: number): void {
+	private _onExit(exitCode: number | undefined): void {
 		this._process = null;
 
 		// If the process is marked as launching then mark the process as killed

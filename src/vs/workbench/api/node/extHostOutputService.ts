@@ -13,6 +13,8 @@ import { dirExists, mkdirp } from 'vs/base/node/pfs';
 import { AbstractExtHostOutputChannel, ExtHostPushOutputChannel, ExtHostOutputService, LazyOutputChannel } from 'vs/workbench/api/common/extHostOutput';
 import { IExtHostInitDataService } from 'vs/workbench/api/common/extHostInitDataService';
 import { IExtHostRpcService } from 'vs/workbench/api/common/extHostRpcService';
+import { MutableDisposable } from 'vs/base/common/lifecycle';
+import { ILogService } from 'vs/platform/log/common/log';
 
 export class ExtHostOutputChannelBackedByFile extends AbstractExtHostOutputChannel {
 
@@ -49,13 +51,25 @@ export class ExtHostOutputService2 extends ExtHostOutputService {
 
 	private _logsLocation: URI;
 	private _namePool: number = 1;
+	private readonly _channels: Map<string, AbstractExtHostOutputChannel> = new Map<string, AbstractExtHostOutputChannel>();
+	private readonly _visibleChannelDisposable = new MutableDisposable();
 
 	constructor(
 		@IExtHostRpcService extHostRpc: IExtHostRpcService,
+		@ILogService private readonly logService: ILogService,
 		@IExtHostInitDataService initData: IExtHostInitDataService,
 	) {
 		super(extHostRpc);
 		this._logsLocation = initData.logsLocation;
+	}
+
+	$setVisibleChannel(channelId: string): void {
+		if (channelId) {
+			const channel = this._channels.get(channelId);
+			if (channel) {
+				this._visibleChannelDisposable.value = channel.onDidAppend(() => channel.update());
+			}
+		}
 	}
 
 	createOutputChannel(name: string): vscode.OutputChannel {
@@ -63,7 +77,9 @@ export class ExtHostOutputService2 extends ExtHostOutputService {
 		if (!name) {
 			throw new Error('illegal argument `name`. must not be falsy');
 		}
-		return new LazyOutputChannel(name, this._doCreateOutChannel(name));
+		const extHostOutputChannel = this._doCreateOutChannel(name);
+		extHostOutputChannel.then(channel => channel._id.then(id => this._channels.set(id, channel)));
+		return new LazyOutputChannel(name, extHostOutputChannel);
 	}
 
 	private async _doCreateOutChannel(name: string): Promise<AbstractExtHostOutputChannel> {
@@ -76,7 +92,7 @@ export class ExtHostOutputService2 extends ExtHostOutputService {
 			return new ExtHostOutputChannelBackedByFile(name, appender, this._proxy);
 		} catch (error) {
 			// Do not crash if logger cannot be created
-			console.log(error);
+			this.logService.error(error);
 			return new ExtHostPushOutputChannel(name, this._proxy);
 		}
 	}

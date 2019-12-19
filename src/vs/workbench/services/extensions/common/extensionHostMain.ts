@@ -6,11 +6,10 @@
 import { timeout } from 'vs/base/common/async';
 import * as errors from 'vs/base/common/errors';
 import { DisposableStore } from 'vs/base/common/lifecycle';
-import { URI, setUriThrowOnMissingScheme } from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { IURITransformer } from 'vs/base/common/uriIpc';
 import { IMessagePassingProtocol } from 'vs/base/parts/ipc/common/ipc';
 import { IInitData, MainContext, MainThreadConsoleShape } from 'vs/workbench/api/common/extHost.protocol';
-import { ExtHostLogService } from 'vs/workbench/api/common/extHostLogService';
 import { RPCProtocol } from 'vs/workbench/services/extensions/common/rpcProtocol';
 import { IExtensionDescription } from 'vs/platform/extensions/common/extensions';
 import { ILogService } from 'vs/platform/log/common/log';
@@ -23,20 +22,12 @@ import { IExtHostRpcService, ExtHostRpcService } from 'vs/workbench/api/common/e
 import { IURITransformerService, URITransformerService } from 'vs/workbench/api/common/extHostUriTransformerService';
 import { IExtHostExtensionService, IHostUtils } from 'vs/workbench/api/common/extHostExtensionService';
 
-// we don't (yet) throw when extensions parse
-// uris that have no scheme
-setUriThrowOnMissingScheme(false);
-
 export interface IExitFn {
 	(code?: number): any;
 }
 
 export interface IConsolePatchFn {
 	(mainThreadConsole: MainThreadConsoleShape): any;
-}
-
-export interface ILogServiceFn {
-	(initData: IInitData): ILogService;
 }
 
 export class ExtensionHostMain {
@@ -50,8 +41,6 @@ export class ExtensionHostMain {
 		protocol: IMessagePassingProtocol,
 		initData: IInitData,
 		hostUtils: IHostUtils,
-		consolePatchFn: IConsolePatchFn,
-		logServiceFn: ILogServiceFn,
 		uriTransformer: IURITransformer | null
 	) {
 		this._isTerminating = false;
@@ -61,27 +50,27 @@ export class ExtensionHostMain {
 		// ensure URIs are transformed and revived
 		initData = ExtensionHostMain._transform(initData, rpcProtocol);
 
-		// allow to patch console
-		consolePatchFn(rpcProtocol.getProxy(MainContext.MainThreadConsole));
-
-		// services
-		const extHostLogService = new ExtHostLogService(logServiceFn(initData), initData.logsLocation.fsPath);
-		this._disposables.add(extHostLogService);
-
 		// bootstrap services
 		const services = new ServiceCollection(...getSingletonServiceDescriptors());
 		services.set(IExtHostInitDataService, { _serviceBrand: undefined, ...initData });
 		services.set(IExtHostRpcService, new ExtHostRpcService(rpcProtocol));
-		services.set(ILogService, extHostLogService);
 		services.set(IURITransformerService, new URITransformerService(uriTransformer));
 		services.set(IHostUtils, hostUtils);
 
 		const instaService: IInstantiationService = new InstantiationService(services, true);
 
-		extHostLogService.info('extension host started');
-		extHostLogService.trace('initData', initData);
+		// todo@joh
+		// ugly self - inject
+		const logService = instaService.invokeFunction(accessor => accessor.get(ILogService));
+		this._disposables.add(logService);
 
-		// todo@joh -> not soo nice...
+		logService.info('extension host started');
+		logService.trace('initData', initData);
+
+		// todo@joh
+		// ugly self - inject
+		// must call initialize *after* creating the extension service
+		// because `initialize` itself creates instances that depend on it
 		this._extensionService = instaService.invokeFunction(accessor => accessor.get(IExtHostExtensionService));
 		this._extensionService.initialize();
 
@@ -152,6 +141,7 @@ export class ExtensionHostMain {
 		initData.environment.globalStorageHome = URI.revive(rpcProtocol.transformIncomingURIs(initData.environment.globalStorageHome));
 		initData.environment.userHome = URI.revive(rpcProtocol.transformIncomingURIs(initData.environment.userHome));
 		initData.logsLocation = URI.revive(rpcProtocol.transformIncomingURIs(initData.logsLocation));
+		initData.logFile = URI.revive(rpcProtocol.transformIncomingURIs(initData.logFile));
 		initData.workspace = rpcProtocol.transformIncomingURIs(initData.workspace);
 		return initData;
 	}

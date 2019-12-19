@@ -24,6 +24,8 @@ export interface IFindInputOptions extends IFindInputStyles {
 	readonly validation?: IInputValidator;
 	readonly label: string;
 	readonly flexibleHeight?: boolean;
+	readonly flexibleWidth?: boolean;
+	readonly flexibleMaxHeight?: number;
 
 	readonly appendCaseSensitiveLabel?: string;
 	readonly appendWholeWordsLabel?: string;
@@ -119,6 +121,8 @@ export class FindInput extends Widget {
 		const appendRegexLabel = options.appendRegexLabel || '';
 		const history = options.history || [];
 		const flexibleHeight = !!options.flexibleHeight;
+		const flexibleWidth = !!options.flexibleWidth;
+		const flexibleMaxHeight = options.flexibleMaxHeight;
 
 		this.domNode = document.createElement('div');
 		dom.addClass(this.domNode, 'monaco-findInput');
@@ -142,7 +146,9 @@ export class FindInput extends Widget {
 			inputValidationErrorForeground: this.inputValidationErrorForeground,
 			inputValidationErrorBorder: this.inputValidationErrorBorder,
 			history,
-			flexibleHeight
+			flexibleHeight,
+			flexibleWidth,
+			flexibleMaxHeight
 		}));
 
 		this.regex = this._register(new RegexCheckbox({
@@ -194,11 +200,7 @@ export class FindInput extends Widget {
 		}));
 
 		if (this._showOptionButtons) {
-			const paddingRight = (this.caseSensitive.width() + this.wholeWords.width() + this.regex.width()) + 'px';
-			this.inputBox.inputElement.style.paddingRight = paddingRight;
-			if (this.inputBox.mirrorElement) {
-				this.inputBox.mirrorElement.style.paddingRight = paddingRight;
-			}
+			this.inputBox.paddingRight = this.caseSensitive.width() + this.wholeWords.width() + this.regex.width();
 		}
 
 		// Arrow-Key support to navigate between options
@@ -394,30 +396,18 @@ export class FindInput extends Widget {
 	}
 
 	public validate(): void {
-		if (this.inputBox) {
-			this.inputBox.validate();
-		}
+		this.inputBox.validate();
 	}
 
 	public showMessage(message: InputBoxMessage): void {
-		if (this.inputBox) {
-			this.inputBox.showMessage(message);
-		}
+		this.inputBox.showMessage(message);
 	}
 
 	public clearMessage(): void {
-		if (this.inputBox) {
-			this.inputBox.hideMessage();
-		}
+		this.inputBox.hideMessage();
 	}
 
 	private clearValidation(): void {
-		if (this.inputBox) {
-			this.inputBox.hideMessage();
-		}
-	}
-
-	public dispose(): void {
-		super.dispose();
+		this.inputBox.hideMessage();
 	}
 }

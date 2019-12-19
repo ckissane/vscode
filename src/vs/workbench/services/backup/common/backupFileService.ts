@@ -11,7 +11,7 @@ import { coalesce } from 'vs/base/common/arrays';
 import { equals, deepClone } from 'vs/base/common/objects';
 import { ResourceQueue } from 'vs/base/common/async';
 import { IBackupFileService, IResolvedBackup } from 'vs/workbench/services/backup/common/backup';
-import { IFileService } from 'vs/platform/files/common/files';
+import { IFileService, FileOperationError, FileOperationResult } from 'vs/platform/files/common/files';
 import { ITextSnapshot } from 'vs/editor/common/model';
 import { createTextBufferFactoryFromStream, createTextBufferFactoryFromSnapshot } from 'vs/editor/common/model/textModel';
 import { keys, ResourceMap } from 'vs/base/common/map';
@@ -19,7 +19,6 @@ import { Schemas } from 'vs/base/common/network';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { TextSnapshotReadable } from 'vs/workbench/services/textfile/common/textfiles';
-import { ServiceIdentifier } from 'vs/platform/instantiation/common/instantiation';
 
 export interface IBackupFilesModel {
 	resolve(backupRoot: URI): Promise<IBackupFilesModel>;
@@ -106,7 +105,7 @@ export class BackupFilesModel implements IBackupFilesModel {
 
 export class BackupFileService implements IBackupFileService {
 
-	_serviceBrand!: ServiceIdentifier<IBackupFileService>;
+	_serviceBrand: undefined;
 
 	private impl: IBackupFileService;
 
@@ -114,7 +113,7 @@ export class BackupFileService implements IBackupFileService {
 		@IWorkbenchEnvironmentService private environmentService: IWorkbenchEnvironmentService,
 		@IFileService protected fileService: IFileService
 	) {
-		this.initialize();
+		this.impl = this.initialize();
 	}
 
 	protected hashPath(resource: URI): string {
@@ -123,13 +122,13 @@ export class BackupFileService implements IBackupFileService {
 		return hash(str).toString(16);
 	}
 
-	private initialize(): void {
+	private initialize(): IBackupFileService {
 		const backupWorkspaceResource = this.environmentService.configuration.backupWorkspaceResource;
 		if (backupWorkspaceResource) {
-			this.impl = new BackupFileServiceImpl(backupWorkspaceResource, this.hashPath, this.fileService);
-		} else {
-			this.impl = new InMemoryBackupFileService(this.hashPath);
+			return new BackupFileServiceImpl(backupWorkspaceResource, this.hashPath, this.fileService);
 		}
+
+		return new InMemoryBackupFileService(this.hashPath);
 	}
 
 	reinitialize(): void {
@@ -188,7 +187,7 @@ class BackupFileServiceImpl implements IBackupFileService {
 	private static readonly PREAMBLE_META_SEPARATOR = ' '; // using a character that is know to be escaped in a URI as separator
 	private static readonly PREAMBLE_MAX_LENGTH = 10000;
 
-	_serviceBrand!: ServiceIdentifier<IBackupFileService>;
+	_serviceBrand: undefined;
 
 	private backupWorkspacePath!: URI;
 
@@ -286,7 +285,7 @@ class BackupFileServiceImpl implements IBackupFileService {
 		const backupResource = this.toBackupResource(resource);
 
 		return this.ioOperationQueues.queueFor(backupResource).queue(async () => {
-			await this.fileService.del(backupResource, { recursive: true });
+			await this.doDiscardResource(backupResource);
 
 			model.remove(backupResource);
 		});
@@ -297,9 +296,19 @@ class BackupFileServiceImpl implements IBackupFileService {
 
 		const model = await this.ready;
 
-		await this.fileService.del(this.backupWorkspacePath, { recursive: true });
+		await this.doDiscardResource(this.backupWorkspacePath);
 
 		model.clear();
+	}
+
+	private async doDiscardResource(resource: URI): Promise<void> {
+		try {
+			await this.fileService.del(resource, { recursive: true });
+		} catch (error) {
+			if ((<FileOperationError>error).fileOperationResult !== FileOperationResult.FILE_NOT_FOUND) {
+				throw error; // re-throw any other error than file not found which is OK
+			}
+		}
 	}
 
 	async getWorkspaceFileBackups(): Promise<URI[]> {
@@ -398,7 +407,7 @@ class BackupFileServiceImpl implements IBackupFileService {
 
 export class InMemoryBackupFileService implements IBackupFileService {
 
-	_serviceBrand!: ServiceIdentifier<IBackupFileService>;
+	_serviceBrand: undefined;
 
 	private backups: Map<string, ITextSnapshot> = new Map();
 
@@ -430,13 +439,13 @@ export class InMemoryBackupFileService implements IBackupFileService {
 		return Promise.resolve();
 	}
 
-	resolveBackupContent<T extends object>(backupResource: URI): Promise<IResolvedBackup<T>> {
+	async resolveBackupContent<T extends object>(backupResource: URI): Promise<IResolvedBackup<T>> {
 		const snapshot = this.backups.get(backupResource.toString());
 		if (snapshot) {
-			return Promise.resolve({ value: createTextBufferFactoryFromSnapshot(snapshot) });
+			return { value: createTextBufferFactoryFromSnapshot(snapshot) };
 		}
 
-		return Promise.reject('Unexpected backup resource to resolve');
+		throw new Error('Unexpected backup resource to resolve');
 	}
 
 	getWorkspaceFileBackups(): Promise<URI[]> {

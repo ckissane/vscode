@@ -17,9 +17,14 @@ export interface ResolvedOptions {
 	readonly extensionHostEnv?: { [key: string]: string | null };
 }
 
+export interface TunnelInformation {
+	environmentTunnels?: { remoteAddress: { port: number, host: string }, localAddress: string }[];
+}
+
 export interface ResolverResult {
 	authority: ResolvedAuthority;
 	options?: ResolvedOptions;
+	tunnelInformation?: TunnelInformation;
 }
 
 export enum RemoteAuthorityResolverErrorCode {
@@ -68,7 +73,7 @@ export class RemoteAuthorityResolverError extends Error {
 
 export interface IRemoteAuthorityResolverService {
 
-	_serviceBrand: any;
+	_serviceBrand: undefined;
 
 	resolveAuthority(authority: string): Promise<ResolverResult>;
 

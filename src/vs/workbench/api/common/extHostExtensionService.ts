@@ -5,7 +5,7 @@
 
 import * as nls from 'vs/nls';
 import * as path from 'vs/base/common/path';
-import { originalFSPath } from 'vs/base/common/resources';
+import { originalFSPath, joinPath } from 'vs/base/common/resources';
 import { Barrier } from 'vs/base/common/async';
 import { dispose, toDisposable, DisposableStore } from 'vs/base/common/lifecycle';
 import { TernarySearchTree } from 'vs/base/common/map';
@@ -13,8 +13,7 @@ import { URI } from 'vs/base/common/uri';
 import { ILogService } from 'vs/platform/log/common/log';
 import { ExtHostExtensionServiceShape, IInitData, MainContext, MainThreadExtensionServiceShape, MainThreadTelemetryShape, MainThreadWorkspaceShape, IResolveAuthorityResult } from 'vs/workbench/api/common/extHost.protocol';
 import { ExtHostConfiguration, IExtHostConfiguration } from 'vs/workbench/api/common/extHostConfiguration';
-import { ActivatedExtension, EmptyExtension, ExtensionActivatedByAPI, ExtensionActivatedByEvent, ExtensionActivationReason, ExtensionActivationTimes, ExtensionActivationTimesBuilder, ExtensionsActivator, IExtensionAPI, IExtensionContext, IExtensionModule, HostExtension, ExtensionActivationTimesFragment } from 'vs/workbench/api/common/extHostExtensionActivator';
-import { ExtHostLogService } from 'vs/workbench/api/common/extHostLogService';
+import { ActivatedExtension, EmptyExtension, ExtensionActivationReason, ExtensionActivationTimes, ExtensionActivationTimesBuilder, ExtensionsActivator, IExtensionAPI, IExtensionModule, HostExtension, ExtensionActivationTimesFragment } from 'vs/workbench/api/common/extHostExtensionActivator';
 import { ExtHostStorage, IExtHostStorage } from 'vs/workbench/api/common/extHostStorage';
 import { ExtHostWorkspace, IExtHostWorkspace } from 'vs/workbench/api/common/extHostWorkspace';
 import { ExtensionActivationError } from 'vs/workbench/services/extensions/common/extensions';
@@ -26,13 +25,14 @@ import { ExtensionIdentifier, IExtensionDescription } from 'vs/platform/extensio
 import { Schemas } from 'vs/base/common/network';
 import { VSBuffer } from 'vs/base/common/buffer';
 import { ExtensionMemento } from 'vs/workbench/api/common/extHostMemento';
-import { RemoteAuthorityResolverError, ExtensionExecutionContext } from 'vs/workbench/api/common/extHostTypes';
+import { RemoteAuthorityResolverError } from 'vs/workbench/api/common/extHostTypes';
 import { ResolvedAuthority, ResolvedOptions } from 'vs/platform/remote/common/remoteAuthorityResolver';
 import { IInstantiationService, createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import { IExtHostInitDataService } from 'vs/workbench/api/common/extHostInitDataService';
 import { IExtensionStoragePaths } from 'vs/workbench/api/common/extHostStoragePaths';
 import { IExtHostRpcService } from 'vs/workbench/api/common/extHostRpcService';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
+import { IExtHostTunnelService } from 'vs/workbench/api/common/extHostTunnelService';
 
 interface ITestRunner {
 	/** Old test runner API, as exported from `vscode/lib/testrunner` */
@@ -61,11 +61,12 @@ type TelemetryActivationEventFragment = {
 	activationEvents: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
 	isBuiltin: { classification: 'SystemMetaData', purpose: 'FeatureInsight', isMeasurement: true };
 	reason: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
+	reasonId: { classification: 'PublicNonPersonalData', purpose: 'FeatureInsight' };
 };
 
 export abstract class AbstractExtHostExtensionService implements ExtHostExtensionServiceShape {
 
-	readonly _serviceBrand: any;
+	readonly _serviceBrand: undefined;
 
 	private static readonly WORKSPACE_CONTAINS_TIMEOUT = 7000;
 
@@ -75,7 +76,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 	protected readonly _instaService: IInstantiationService;
 	protected readonly _extHostWorkspace: ExtHostWorkspace;
 	protected readonly _extHostConfiguration: ExtHostConfiguration;
-	protected readonly _extHostLogService: ExtHostLogService;
+	protected readonly _logService: ILogService;
+	protected readonly _extHostTunnelService: IExtHostTunnelService;
 
 	protected readonly _mainThreadWorkspaceProxy: MainThreadWorkspaceShape;
 	protected readonly _mainThreadTelemetryProxy: MainThreadTelemetryShape;
@@ -102,9 +104,10 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		@IExtHostRpcService extHostContext: IExtHostRpcService,
 		@IExtHostWorkspace extHostWorkspace: IExtHostWorkspace,
 		@IExtHostConfiguration extHostConfiguration: IExtHostConfiguration,
-		@ILogService extHostLogService: ExtHostLogService,
+		@ILogService logService: ILogService,
 		@IExtHostInitDataService initData: IExtHostInitDataService,
-		@IExtensionStoragePaths storagePath: IExtensionStoragePaths
+		@IExtensionStoragePaths storagePath: IExtensionStoragePaths,
+		@IExtHostTunnelService extHostTunnelService: IExtHostTunnelService
 	) {
 		this._hostUtils = hostUtils;
 		this._extHostContext = extHostContext;
@@ -112,7 +115,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 
 		this._extHostWorkspace = extHostWorkspace;
 		this._extHostConfiguration = extHostConfiguration;
-		this._extHostLogService = extHostLogService;
+		this._logService = logService;
+		this._extHostTunnelService = extHostTunnelService;
 		this._disposables = new DisposableStore();
 
 		this._mainThreadWorkspaceProxy = this._extHostContext.getProxy(MainContext.MainThreadWorkspace);
@@ -133,21 +137,26 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		const hostExtensions = new Set<string>();
 		this._initData.hostExtensions.forEach((extensionId) => hostExtensions.add(ExtensionIdentifier.toKey(extensionId)));
 
-		this._activator = new ExtensionsActivator(this._registry, this._initData.resolvedExtensions, this._initData.hostExtensions, {
-			onExtensionActivationError: (extensionId: ExtensionIdentifier, error: ExtensionActivationError): void => {
-				this._mainThreadExtensionsProxy.$onExtensionActivationError(extensionId, error);
-			},
+		this._activator = new ExtensionsActivator(
+			this._registry,
+			this._initData.resolvedExtensions,
+			this._initData.hostExtensions,
+			{
+				onExtensionActivationError: (extensionId: ExtensionIdentifier, error: ExtensionActivationError): void => {
+					this._mainThreadExtensionsProxy.$onExtensionActivationError(extensionId, error);
+				},
 
-			actualActivateExtension: async (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<ActivatedExtension> => {
-				if (hostExtensions.has(ExtensionIdentifier.toKey(extensionId))) {
-					const activationEvent = (reason instanceof ExtensionActivatedByEvent ? reason.activationEvent : null);
-					await this._mainThreadExtensionsProxy.$activateExtension(extensionId, activationEvent);
-					return new HostExtension();
+				actualActivateExtension: async (extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<ActivatedExtension> => {
+					if (hostExtensions.has(ExtensionIdentifier.toKey(extensionId))) {
+						await this._mainThreadExtensionsProxy.$activateExtension(extensionId, reason);
+						return new HostExtension();
+					}
+					const extensionDescription = this._registry.getExtensionDescription(extensionId)!;
+					return this._activateExtension(extensionDescription, reason);
 				}
-				const extensionDescription = this._registry.getExtensionDescription(extensionId)!;
-				return this._activateExtension(extensionDescription, reason);
-			}
-		});
+			},
+			this._logService
+		);
 		this._extensionPathIndex = null;
 		this._resolvers = Object.create(null);
 		this._started = false;
@@ -196,8 +205,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 	}
 
 	private _activateByEvent(activationEvent: string, startup: boolean): Promise<void> {
-		const reason = new ExtensionActivatedByEvent(startup, activationEvent);
-		return this._activator.activateByEvent(activationEvent, reason);
+		return this._activator.activateByEvent(activationEvent, startup);
 	}
 
 	private _activateById(extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void> {
@@ -286,8 +294,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		this._mainThreadExtensionsProxy.$onWillActivateExtension(extensionDescription.identifier);
 		return this._doActivateExtension(extensionDescription, reason).then((activatedExtension) => {
 			const activationTimes = activatedExtension.activationTimes;
-			const activationEvent = (reason instanceof ExtensionActivatedByEvent ? reason.activationEvent : null);
-			this._mainThreadExtensionsProxy.$onDidActivateExtension(extensionDescription.identifier, activationTimes.startup, activationTimes.codeLoadingTime, activationTimes.activateCallTime, activationTimes.activateResolvedTime, activationEvent);
+			this._mainThreadExtensionsProxy.$onDidActivateExtension(extensionDescription.identifier, activationTimes.codeLoadingTime, activationTimes.activateCallTime, activationTimes.activateResolvedTime, reason);
 			this._logExtensionActivationTimes(extensionDescription, reason, 'success', activationTimes);
 			return activatedExtension;
 		}, (err) => {
@@ -329,46 +336,46 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 			return Promise.resolve(new EmptyExtension(ExtensionActivationTimes.NONE));
 		}
 
-		this._extHostLogService.info(`ExtensionService#_doActivateExtension ${extensionDescription.identifier.value} ${JSON.stringify(reason)}`);
+		this._logService.info(`ExtensionService#_doActivateExtension ${extensionDescription.identifier.value} ${JSON.stringify(reason)}`);
+		this._logService.flush();
 
 		const activationTimesBuilder = new ExtensionActivationTimesBuilder(reason.startup);
-		return Promise.all<any>([
-			this._loadCommonJSModule(extensionDescription.main, activationTimesBuilder),
+		return Promise.all([
+			this._loadCommonJSModule<IExtensionModule>(joinPath(extensionDescription.extensionLocation, extensionDescription.main), activationTimesBuilder),
 			this._loadExtensionContext(extensionDescription)
 		]).then(values => {
-			return AbstractExtHostExtensionService._callActivate(this._extHostLogService, extensionDescription.identifier, <IExtensionModule>values[0], <IExtensionContext>values[1], activationTimesBuilder);
+			return AbstractExtHostExtensionService._callActivate(this._logService, extensionDescription.identifier, values[0], values[1], activationTimesBuilder);
 		});
 	}
 
-	protected abstract _loadCommonJSModule<T>(modulePath: string, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<T>;
+	protected abstract _loadCommonJSModule<T>(module: URI, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<T>;
 
 	private _loadExtensionContext(extensionDescription: IExtensionDescription): Promise<vscode.ExtensionContext> {
 
 		const globalState = new ExtensionMemento(extensionDescription.identifier.value, true, this._storage);
 		const workspaceState = new ExtensionMemento(extensionDescription.identifier.value, false, this._storage);
 
-		this._extHostLogService.trace(`ExtensionService#loadExtensionContext ${extensionDescription.identifier.value}`);
+		this._logService.trace(`ExtensionService#loadExtensionContext ${extensionDescription.identifier.value}`);
 		return Promise.all([
 			globalState.whenReady,
 			workspaceState.whenReady,
 			this._storagePath.whenReady
 		]).then(() => {
 			const that = this;
-			return Object.freeze(<IExtensionContext>{
+			return Object.freeze<vscode.ExtensionContext>({
 				globalState,
 				workspaceState,
 				subscriptions: [],
 				get extensionPath() { return extensionDescription.extensionLocation.fsPath; },
-				storagePath: this._storagePath.workspaceValue(extensionDescription),
-				globalStoragePath: this._storagePath.globalValue(extensionDescription),
+				get storagePath() { return that._storagePath.workspaceValue(extensionDescription); },
+				get globalStoragePath() { return that._storagePath.globalValue(extensionDescription); },
 				asAbsolutePath: (relativePath: string) => { return path.join(extensionDescription.extensionLocation.fsPath, relativePath); },
-				logPath: that._extHostLogService.getLogDirectory(extensionDescription.identifier),
-				executionContext: this._initData.remote.isRemote ? ExtensionExecutionContext.Remote : ExtensionExecutionContext.Local,
+				get logPath() { return path.join(that._initData.logsLocation.fsPath, extensionDescription.identifier.value); }
 			});
 		});
 	}
 
-	private static _callActivate(logService: ILogService, extensionId: ExtensionIdentifier, extensionModule: IExtensionModule, context: IExtensionContext, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<ActivatedExtension> {
+	private static _callActivate(logService: ILogService, extensionId: ExtensionIdentifier, extensionModule: IExtensionModule, context: vscode.ExtensionContext, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<ActivatedExtension> {
 		// Make sure the extension's surface is not undefined
 		extensionModule = extensionModule || {
 			activate: undefined,
@@ -380,12 +387,13 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		});
 	}
 
-	private static _callActivateOptional(logService: ILogService, extensionId: ExtensionIdentifier, extensionModule: IExtensionModule, context: IExtensionContext, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<IExtensionAPI> {
+	private static _callActivateOptional(logService: ILogService, extensionId: ExtensionIdentifier, extensionModule: IExtensionModule, context: vscode.ExtensionContext, activationTimesBuilder: ExtensionActivationTimesBuilder): Promise<IExtensionAPI> {
 		if (typeof extensionModule.activate === 'function') {
 			try {
 				activationTimesBuilder.activateCallStart();
 				logService.trace(`ExtensionService#_callActivateOptional ${extensionId.value}`);
-				const activateResult: Promise<IExtensionAPI> = extensionModule.activate.apply(global, [context]);
+				const scope = typeof global === 'object' ? global : self; // `global` is nodejs while `self` is for workers
+				const activateResult: Promise<IExtensionAPI> = extensionModule.activate.apply(scope, [context]);
 				activationTimesBuilder.activateCallStop();
 
 				activationTimesBuilder.activateResolveStart();
@@ -407,7 +415,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 	// Handle "eager" activation extensions
 	private _handleEagerExtensions(): Promise<void> {
 		this._activateByEvent('*', true).then(undefined, (err) => {
-			console.error(err);
+			this._logService.error(err);
 		});
 
 		this._disposables.add(this._extHostWorkspace.onDidChangeWorkspace((e) => this._handleWorkspaceContainsEagerExtensions(e.added)));
@@ -468,8 +476,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 			if (await this._hostUtils.exists(path.join(URI.revive(uri).fsPath, fileName))) {
 				// the file was found
 				return (
-					this._activateById(extensionId, new ExtensionActivatedByEvent(true, `workspaceContains:${fileName}`))
-						.then(undefined, err => console.error(err))
+					this._activateById(extensionId, { startup: true, extensionId, activationEvent: `workspaceContains:${fileName}` })
+						.then(undefined, err => this._logService.error(err))
 				);
 			}
 		}
@@ -478,7 +486,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 	}
 
 	private async _activateIfGlobPatterns(folders: ReadonlyArray<vscode.WorkspaceFolder>, extensionId: ExtensionIdentifier, globPatterns: string[]): Promise<void> {
-		this._extHostLogService.trace(`extensionHostMain#activateIfGlobPatterns: fileSearch, extension: ${extensionId.value}, entryPoint: workspaceContains`);
+		this._logService.trace(`extensionHostMain#activateIfGlobPatterns: fileSearch, extension: ${extensionId.value}, entryPoint: workspaceContains`);
 
 		if (globPatterns.length === 0) {
 			return Promise.resolve(undefined);
@@ -489,8 +497,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 
 		const timer = setTimeout(async () => {
 			tokenSource.cancel();
-			this._activateById(extensionId, new ExtensionActivatedByEvent(true, `workspaceContainsTimeout:${globPatterns.join(',')}`))
-				.then(undefined, err => console.error(err));
+			this._activateById(extensionId, { startup: true, extensionId, activationEvent: `workspaceContainsTimeout:${globPatterns.join(',')}` })
+				.then(undefined, err => this._logService.error(err));
 		}, AbstractExtHostExtensionService.WORKSPACE_CONTAINS_TIMEOUT);
 
 		let exists: boolean = false;
@@ -498,7 +506,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 			exists = await searchP;
 		} catch (err) {
 			if (!errors.isPromiseCanceledError(err)) {
-				console.error(err);
+				this._logService.error(err);
 			}
 		}
 
@@ -508,8 +516,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		if (exists) {
 			// a file was found matching one of the glob patterns
 			return (
-				this._activateById(extensionId, new ExtensionActivatedByEvent(true, `workspaceContains:${globPatterns.join(',')}`))
-					.then(undefined, err => console.error(err))
+				this._activateById(extensionId, { startup: true, extensionId, activationEvent: `workspaceContains:${globPatterns.join(',')}` })
+					.then(undefined, err => this._logService.error(err))
 			);
 		}
 
@@ -525,7 +533,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 	}
 
 	private async _doHandleExtensionTests(): Promise<void> {
-		const { extensionDevelopmentLocationURI: extensionDevelopmentLocationURI, extensionTestsLocationURI } = this._initData.environment;
+		const { extensionDevelopmentLocationURI, extensionTestsLocationURI } = this._initData.environment;
 		if (!(extensionDevelopmentLocationURI && extensionTestsLocationURI && extensionTestsLocationURI.scheme === Schemas.file)) {
 			return Promise.resolve(undefined);
 		}
@@ -536,7 +544,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		let testRunner: ITestRunner | INewTestRunner | undefined;
 		let requireError: Error | undefined;
 		try {
-			testRunner = await this._loadCommonJSModule(extensionTestsPath, new ExtensionActivationTimesBuilder(false));
+			testRunner = await this._loadCommonJSModule(URI.file(extensionTestsPath), new ExtensionActivationTimesBuilder(false));
 		} catch (error) {
 			requireError = error;
 		}
@@ -605,7 +613,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 			.then(() => this._handleEagerExtensions())
 			.then(() => this._handleExtensionTests())
 			.then(() => {
-				this._extHostLogService.info(`eager extensions activated`);
+				this._logService.info(`eager extensions activated`);
 			});
 	}
 
@@ -637,6 +645,7 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 
 		try {
 			const result = await resolver.resolve(remoteAuthority, { resolveAttempt });
+			this._disposables.add(await this._extHostTunnelService.setForwardPortProvider(resolver));
 
 			// Split merged API result into separate authority/options
 			const authority: ResolvedAuthority = {
@@ -652,7 +661,8 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 				type: 'ok',
 				value: {
 					authority,
-					options
+					options,
+					tunnelInformation: { environmentTunnels: result.environmentTunnels }
 				}
 			};
 		} catch (err) {
@@ -682,13 +692,13 @@ export abstract class AbstractExtHostExtensionService implements ExtHostExtensio
 		);
 	}
 
-	public async $activate(extensionId: ExtensionIdentifier, activationEvent: string): Promise<boolean> {
+	public async $activate(extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<boolean> {
 		await this._readyToRunExtensions.wait();
 		if (!this._registry.getExtensionDescription(extensionId)) {
 			// unknown extension => ignore
 			return false;
 		}
-		await this._activateById(extensionId, new ExtensionActivatedByEvent(false, activationEvent));
+		await this._activateById(extensionId, reason);
 		return true;
 	}
 
@@ -744,12 +754,10 @@ type TelemetryActivationEvent = {
 	activationEvents: string | null;
 	isBuiltin: boolean;
 	reason: string;
+	reasonId: string;
 };
 
 function getTelemetryActivationEvent(extensionDescription: IExtensionDescription, reason: ExtensionActivationReason): TelemetryActivationEvent {
-	const reasonStr = reason instanceof ExtensionActivatedByEvent ? reason.activationEvent :
-		reason instanceof ExtensionActivatedByAPI ? 'api' :
-			'';
 	const event = {
 		id: extensionDescription.identifier.value,
 		name: extensionDescription.name,
@@ -757,7 +765,8 @@ function getTelemetryActivationEvent(extensionDescription: IExtensionDescription
 		publisherDisplayName: extensionDescription.publisher,
 		activationEvents: extensionDescription.activationEvents ? extensionDescription.activationEvents.join(',') : null,
 		isBuiltin: extensionDescription.isBuiltin,
-		reason: reasonStr
+		reason: reason.activationEvent,
+		reasonId: reason.extensionId.value,
 	};
 
 	return event;
@@ -767,7 +776,7 @@ function getTelemetryActivationEvent(extensionDescription: IExtensionDescription
 export const IExtHostExtensionService = createDecorator<IExtHostExtensionService>('IExtHostExtensionService');
 
 export interface IExtHostExtensionService extends AbstractExtHostExtensionService {
-	_serviceBrand: any;
+	_serviceBrand: undefined;
 	initialize(): Promise<void>;
 	isActivated(extensionId: ExtensionIdentifier): boolean;
 	activateByIdWithErrors(extensionId: ExtensionIdentifier, reason: ExtensionActivationReason): Promise<void>;

@@ -50,14 +50,14 @@ export function getResourceForCommand(resource: URI | object | undefined, listSe
 		return focus.getResource();
 	}
 
-	return editorService.activeEditor ? toResource(editorService.activeEditor, { supportSideBySide: SideBySideEditor.MASTER }) : undefined;
+	return editorService.activeEditor ? toResource(editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY }) : undefined;
 }
 
 export function getMultiSelectedResources(resource: URI | object | undefined, listService: IListService, editorService: IEditorService, explorerService: IExplorerService): Array<URI> {
 	const list = listService.lastFocusedList;
 	if (list?.getHTMLElement() === document.activeElement) {
 		// Explorer
-		if (list instanceof AsyncDataTree) {
+		if (list instanceof AsyncDataTree && list.getFocus().every(item => item instanceof ExplorerItem)) {
 			// Explorer
 			const context = explorerService.getContext(true);
 			if (context.length) {

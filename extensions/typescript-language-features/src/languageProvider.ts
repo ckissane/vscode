@@ -14,7 +14,7 @@ import { Disposable } from './utils/dispose';
 import * as fileSchemes from './utils/fileSchemes';
 import { LanguageDescription } from './utils/languageDescription';
 import { memoize } from './utils/memoize';
-import TelemetryReporter from './utils/telemetry';
+import { TelemetryReporter } from './utils/telemetry';
 import TypingsStatus from './utils/typingsStatus';
 
 
@@ -78,6 +78,8 @@ export default class LanguageProvider extends Disposable {
 			import('./features/signatureHelp').then(provider => this._register(provider.register(selector, this.client))),
 			import('./features/tagClosing').then(provider => this._register(provider.register(selector, this.description.id, this.client))),
 			import('./features/typeDefinitions').then(provider => this._register(provider.register(selector, this.client))),
+			import('./features/semanticTokens').then(provider => this._register(provider.register(selector, this.client))),
+			import('./features/callHierarchy').then(provider => this._register(provider.register(selector, this.client))),
 		]);
 	}
 
@@ -120,13 +122,19 @@ export default class LanguageProvider extends Disposable {
 		this.client.bufferSyncSupport.requestAllDiagnostics();
 	}
 
-	public diagnosticsReceived(diagnosticsKind: DiagnosticKind, file: vscode.Uri, diagnostics: (vscode.Diagnostic & { reportUnnecessary: any })[]): void {
+	public diagnosticsReceived(diagnosticsKind: DiagnosticKind, file: vscode.Uri, diagnostics: (vscode.Diagnostic & { reportUnnecessary: any, reportDeprecated: any })[]): void {
 		const config = vscode.workspace.getConfiguration(this.id, file);
 		const reportUnnecessary = config.get<boolean>('showUnused', true);
+		const reportDeprecated = config.get<boolean>('showDeprecated', true);
 		this.client.diagnosticsManager.updateDiagnostics(file, this._diagnosticLanguage, diagnosticsKind, diagnostics.filter(diag => {
+			// Don't both reporting diagnostics we know will not be rendered
 			if (!reportUnnecessary) {
-				diag.tags = undefined;
 				if (diag.reportUnnecessary && diag.severity === vscode.DiagnosticSeverity.Hint) {
+					return false;
+				}
+			}
+			if (!reportDeprecated) {
+				if (diag.reportDeprecated && diag.severity === vscode.DiagnosticSeverity.Hint) {
 					return false;
 				}
 			}

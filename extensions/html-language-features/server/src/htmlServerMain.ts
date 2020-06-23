@@ -23,12 +23,13 @@ import { formatError, runSafe, runSafeAsync } from './utils/runner';
 import { getFoldingRanges } from './modes/htmlFolding';
 import { getDataProviders } from './customData';
 import { getSelectionRanges } from './modes/selectionRanges';
+import { SemanticTokenProvider, newSemanticTokenProvider } from './modes/semanticTokens';
 
 namespace TagCloseRequest {
 	export const type: RequestType<TextDocumentPositionParams, string | null, any, any> = new RequestType('html/tag');
 }
-namespace MatchingTagPositionRequest {
-	export const type: RequestType<TextDocumentPositionParams, Position | null, any, any> = new RequestType('html/matchingTagPosition');
+namespace OnTypeRenameRequest {
+	export const type: RequestType<TextDocumentPositionParams, Range[] | null, any, any> = new RequestType('html/onTypeRename');
 }
 
 // experimental: semantic tokens
@@ -498,46 +499,35 @@ connection.onRenameRequest((params, token) => {
 	}, null, `Error while computing rename for ${params.textDocument.uri}`, token);
 });
 
-connection.onRequest(MatchingTagPositionRequest.type, (params, token) => {
+connection.onRequest(OnTypeRenameRequest.type, (params, token) => {
 	return runSafe(() => {
 		const document = documents.get(params.textDocument.uri);
 		if (document) {
 			const pos = params.position;
 			if (pos.character > 0) {
 				const mode = languageModes.getModeAtPosition(document, Position.create(pos.line, pos.character - 1));
-				if (mode && mode.findMatchingTagPosition) {
-					return mode.findMatchingTagPosition(document, pos);
+				if (mode && mode.doOnTypeRename) {
+					return mode.doOnTypeRename(document, pos);
 				}
 			}
 		}
 		return null;
-	}, null, `Error while computing matching tag position for ${params.textDocument.uri}`, token);
+	}, null, `Error while computing synced regions for ${params.textDocument.uri}`, token);
 });
 
-connection.onRequest(MatchingTagPositionRequest.type, (params, token) => {
-	return runSafe(() => {
-		const document = documents.get(params.textDocument.uri);
-		if (document) {
-			const pos = params.position;
-			if (pos.character > 0) {
-				const mode = languageModes.getModeAtPosition(document, Position.create(pos.line, pos.character - 1));
-				if (mode && mode.findMatchingTagPosition) {
-					return mode.findMatchingTagPosition(document, pos);
-				}
-			}
-		}
-		return null;
-	}, null, `Error while computing matching tag position for ${params.textDocument.uri}`, token);
-});
+let semanticTokensProvider: SemanticTokenProvider | undefined;
+function getSemanticTokenProvider() {
+	if (!semanticTokensProvider) {
+		semanticTokensProvider = newSemanticTokenProvider(languageModes);
+	}
+	return semanticTokensProvider;
+}
 
 connection.onRequest(SemanticTokenRequest.type, (params, token) => {
 	return runSafe(() => {
 		const document = documents.get(params.textDocument.uri);
 		if (document) {
-			const jsMode = languageModes.getMode('javascript');
-			if (jsMode && jsMode.getSemanticTokens) {
-				return jsMode.getSemanticTokens(document, params.ranges);
-			}
+			return getSemanticTokenProvider().getSemanticTokens(document, params.ranges);
 		}
 		return null;
 	}, null, `Error while computing semantic tokens for ${params.textDocument.uri}`, token);
@@ -545,11 +535,7 @@ connection.onRequest(SemanticTokenRequest.type, (params, token) => {
 
 connection.onRequest(SemanticTokenLegendRequest.type, (_params, token) => {
 	return runSafe(() => {
-		const jsMode = languageModes.getMode('javascript');
-		if (jsMode && jsMode.getSemanticTokenLegend) {
-			return jsMode.getSemanticTokenLegend();
-		}
-		return null;
+		return getSemanticTokenProvider().legend;
 	}, null, `Error while computing semantic tokens legend`, token);
 });
 

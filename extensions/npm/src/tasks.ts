@@ -29,6 +29,8 @@ type AutoDetect = 'on' | 'off';
 
 let cachedTasks: Task[] | undefined = undefined;
 
+const INSTALL_SCRIPT = 'install';
+
 export class NpmTaskProvider implements TaskProvider {
 
 	constructor() {
@@ -52,7 +54,7 @@ export class NpmTaskProvider implements TaskProvider {
 			} else {
 				packageJsonUri = _task.scope.uri.with({ path: _task.scope.uri.path + '/package.json' });
 			}
-			return createTask(kind, `run ${kind.script}`, _task.scope, packageJsonUri);
+			return createTask(kind, `${kind.script === INSTALL_SCRIPT ? '' : 'run '}${kind.script}`, _task.scope, packageJsonUri);
 		}
 		return undefined;
 	}
@@ -144,7 +146,7 @@ async function detectNpmScripts(): Promise<Task[]> {
 		for (const folder of folders) {
 			if (isAutoDetectionEnabled(folder)) {
 				let relativePattern = new RelativePattern(folder, '**/package.json');
-				let paths = await workspace.findFiles(relativePattern, '**/node_modules/**');
+				let paths = await workspace.findFiles(relativePattern, '**/{node_modules,.vscode-test}/**');
 				for (const path of paths) {
 					if (!isExcluded(folder, path) && !visitedPackageJsonFiles.has(path.fsPath)) {
 						let tasks = await provideNpmScriptsForFolder(path);
@@ -190,8 +192,8 @@ export async function provideNpmScripts(): Promise<Task[]> {
 	return cachedTasks;
 }
 
-function isAutoDetectionEnabled(folder: WorkspaceFolder): boolean {
-	return workspace.getConfiguration('npm', folder.uri).get<AutoDetect>('autoDetect') === 'on';
+export function isAutoDetectionEnabled(folder?: WorkspaceFolder): boolean {
+	return workspace.getConfiguration('npm', folder?.uri).get<AutoDetect>('autoDetect') === 'on';
 }
 
 function isExcluded(folder: WorkspaceFolder, packageJsonUri: Uri) {
@@ -253,7 +255,7 @@ async function provideNpmScriptsForFolder(packageJsonUri: Uri): Promise<Task[]> 
 		result.push(task);
 	});
 	// always add npm install (without a problem matcher)
-	result.push(createTask('install', 'install', folder, packageJsonUri, 'install dependencies from package', []));
+	result.push(createTask(INSTALL_SCRIPT, INSTALL_SCRIPT, folder, packageJsonUri, 'install dependencies from package', []));
 	return result;
 }
 

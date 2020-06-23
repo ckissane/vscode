@@ -13,19 +13,20 @@ import { Position } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
 import { Selection } from 'vs/editor/common/core/selection';
 import { Constants } from 'vs/base/common/uint';
-import * as editorCommon from 'vs/editor/common/editorCommon';
+import { ScrollType, ICommand } from 'vs/editor/common/editorCommon';
 import { EndOfLinePreference, FindMatch, ITextModel } from 'vs/editor/common/model';
 import { SearchParams } from 'vs/editor/common/model/textModelSearch';
 import { FindDecorations } from 'vs/editor/contrib/find/findDecorations';
 import { FindReplaceState, FindReplaceStateChangedEvent } from 'vs/editor/contrib/find/findState';
 import { ReplaceAllCommand } from 'vs/editor/contrib/find/replaceAllCommand';
 import { ReplacePattern, parseReplaceString } from 'vs/editor/contrib/find/replacePattern';
-import { ContextKeyExpr, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
+import { RawContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { IKeybindings } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { EditorOption } from 'vs/editor/common/config/editorOptions';
+import { findFirstInSorted } from 'vs/base/common/arrays';
 
 export const CONTEXT_FIND_WIDGET_VISIBLE = new RawContextKey<boolean>('findWidgetVisible', false);
-export const CONTEXT_FIND_WIDGET_NOT_VISIBLE: ContextKeyExpr = CONTEXT_FIND_WIDGET_VISIBLE.toNegated();
+export const CONTEXT_FIND_WIDGET_NOT_VISIBLE = CONTEXT_FIND_WIDGET_VISIBLE.toNegated();
 // Keep ContextKey use of 'Focussed' to not break when clauses
 export const CONTEXT_FIND_INPUT_FOCUSED = new RawContextKey<boolean>('findInputFocussed', false);
 export const CONTEXT_REPLACE_INPUT_FOCUSED = new RawContextKey<boolean>('replaceInputFocussed', false);
@@ -189,8 +190,17 @@ export class FindModelBoundToEditorModel {
 		let findMatches = this._findMatches(findScope, false, MATCHES_LIMIT);
 		this._decorations.set(findMatches, findScope);
 
+		const editorSelection = this._editor.getSelection();
+		let currentMatchesPosition = this._decorations.getCurrentMatchesPosition(editorSelection);
+		if (currentMatchesPosition === 0 && findMatches.length > 0) {
+			// current selection is not on top of a match
+			// try to find its nearest result from the top of the document
+			const matchAfterSelection = findFirstInSorted(findMatches.map(match => match.range), range => Range.compareRangesUsingStarts(range, editorSelection) >= 0);
+			currentMatchesPosition = matchAfterSelection > 0 ? matchAfterSelection - 1 + 1 /** match position is one based */ : currentMatchesPosition;
+		}
+
 		this._state.changeMatchInfo(
-			this._decorations.getCurrentMatchesPosition(this._editor.getSelection()),
+			currentMatchesPosition,
 			this._decorations.getCount(),
 			undefined
 		);
@@ -209,7 +219,7 @@ export class FindModelBoundToEditorModel {
 			let findScope = this._decorations.getFindScope();
 			if (findScope) {
 				// Reveal the selection so user is reminded that 'selection find' is on.
-				this._editor.revealRangeInCenterIfOutsideViewport(findScope, editorCommon.ScrollType.Smooth);
+				this._editor.revealRangeInCenterIfOutsideViewport(findScope, ScrollType.Smooth);
 			}
 			return true;
 		}
@@ -225,7 +235,7 @@ export class FindModelBoundToEditorModel {
 		);
 
 		this._editor.setSelection(match);
-		this._editor.revealRangeInCenterIfOutsideViewport(match, editorCommon.ScrollType.Smooth);
+		this._editor.revealRangeInCenterIfOutsideViewport(match, ScrollType.Smooth);
 	}
 
 	private _prevSearchPosition(before: Position) {
@@ -251,6 +261,9 @@ export class FindModelBoundToEditorModel {
 	}
 
 	private _moveToPrevMatch(before: Position, isRecursed: boolean = false): void {
+		if (!this._state.canNavigateBack()) {
+			return;
+		}
 		if (this._decorations.getCount() < MATCHES_LIMIT) {
 			let prevMatchRange = this._decorations.matchBeforePosition(before);
 
@@ -336,6 +349,9 @@ export class FindModelBoundToEditorModel {
 	}
 
 	private _moveToNextMatch(after: Position): void {
+		if (!this._state.canNavigateForward()) {
+			return;
+		}
 		if (this._decorations.getCount() < MATCHES_LIMIT) {
 			let nextMatchRange = this._decorations.matchAfterPosition(after);
 
@@ -536,7 +552,7 @@ export class FindModelBoundToEditorModel {
 		this._editor.setSelections(selections);
 	}
 
-	private _executeEditorCommand(source: string, command: editorCommon.ICommand): void {
+	private _executeEditorCommand(source: string, command: ICommand): void {
 		try {
 			this._ignoreModelContentChanged = true;
 			this._editor.pushUndoStop();

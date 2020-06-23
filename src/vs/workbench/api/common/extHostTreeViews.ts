@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from 'vs/nls';
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 import { basename } from 'vs/base/common/resources';
 import { URI } from 'vs/base/common/uri';
 import { Emitter, Event } from 'vs/base/common/event';
@@ -19,6 +19,8 @@ import { equals, coalesce } from 'vs/base/common/arrays';
 import { ILogService } from 'vs/platform/log/common/log';
 import { checkProposedApiEnabled } from 'vs/workbench/services/extensions/common/extensions';
 import { IExtensionDescription } from 'vs/platform/extensions/common/extensions';
+import { MarkdownString } from 'vs/workbench/api/common/extHostTypeConverters';
+import { IMarkdownString } from 'vs/base/common/htmlContent';
 
 type TreeItemHandle = string;
 
@@ -153,7 +155,7 @@ export class ExtHostTreeViews implements ExtHostTreeViewsShape {
 	}
 }
 
-type Root = null | undefined;
+type Root = null | undefined | void;
 type TreeData<T> = { message: boolean, element: T | Root | false };
 
 interface TreeNode extends IDisposable {
@@ -237,7 +239,7 @@ class ExtHostTreeView<T> extends Disposable {
 				result.message = true;
 			}
 			return result;
-		}, 200)(({ message, elements }) => {
+		}, 200, true)(({ message, elements }) => {
 			if (elements.length) {
 				this.refreshQueue = this.refreshQueue.then(() => {
 					const _promiseCallback = promiseCallback;
@@ -486,7 +488,18 @@ class ExtHostTreeView<T> extends Disposable {
 		return node;
 	}
 
-	private createTreeNode(element: T, extensionTreeItem: vscode.TreeItem, parent: TreeNode | Root): TreeNode {
+	private getTooltip(tooltip?: string | vscode.MarkdownString): string | IMarkdownString | undefined {
+		if (typeof tooltip === 'string') {
+			return tooltip;
+		} else if (tooltip === undefined) {
+			return undefined;
+		} else {
+			checkProposedApiEnabled(this.extension);
+			return MarkdownString.from(tooltip);
+		}
+	}
+
+	private createTreeNode(element: T, extensionTreeItem: vscode.TreeItem2, parent: TreeNode | Root): TreeNode {
 		const disposable = new DisposableStore();
 		const handle = this.createHandle(element, extensionTreeItem, parent);
 		const icon = this.getLightIconPath(extensionTreeItem);
@@ -496,13 +509,14 @@ class ExtHostTreeView<T> extends Disposable {
 			label: toTreeItemLabel(extensionTreeItem.label, this.extension),
 			description: extensionTreeItem.description,
 			resourceUri: extensionTreeItem.resourceUri,
-			tooltip: typeof extensionTreeItem.tooltip === 'string' ? extensionTreeItem.tooltip : undefined,
+			tooltip: this.getTooltip(extensionTreeItem.tooltip),
 			command: extensionTreeItem.command ? this.commands.toInternal(extensionTreeItem.command, disposable) : undefined,
 			contextValue: extensionTreeItem.contextValue,
 			icon,
 			iconDark: this.getDarkIconPath(extensionTreeItem) || icon,
 			themeIcon: extensionTreeItem.iconPath instanceof ThemeIcon ? { id: extensionTreeItem.iconPath.id } : undefined,
-			collapsibleState: isUndefinedOrNull(extensionTreeItem.collapsibleState) ? TreeItemCollapsibleState.None : extensionTreeItem.collapsibleState
+			collapsibleState: isUndefinedOrNull(extensionTreeItem.collapsibleState) ? TreeItemCollapsibleState.None : extensionTreeItem.collapsibleState,
+			accessibilityInformation: extensionTreeItem.accessibilityInformation
 		};
 
 		return {

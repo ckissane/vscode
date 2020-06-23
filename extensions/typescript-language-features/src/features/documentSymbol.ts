@@ -4,11 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import * as Proto from '../protocol';
+import type * as Proto from '../protocol';
 import * as PConst from '../protocol.const';
 import { ITypeScriptServiceClient } from '../typescriptService';
 import * as typeConverters from '../utils/typeConverters';
 import { CachedResponse } from '../tsServer/cachedResponse';
+import { parseKindModifier } from '../utils/modifiers';
 
 const getSymbolKind = (kind: string): vscode.SymbolKind => {
 	switch (kind) {
@@ -16,7 +17,7 @@ const getSymbolKind = (kind: string): vscode.SymbolKind => {
 		case PConst.Kind.class: return vscode.SymbolKind.Class;
 		case PConst.Kind.enum: return vscode.SymbolKind.Enum;
 		case PConst.Kind.interface: return vscode.SymbolKind.Interface;
-		case PConst.Kind.memberFunction: return vscode.SymbolKind.Method;
+		case PConst.Kind.method: return vscode.SymbolKind.Method;
 		case PConst.Kind.memberVariable: return vscode.SymbolKind.Property;
 		case PConst.Kind.memberGetAccessor: return vscode.SymbolKind.Property;
 		case PConst.Kind.memberSetAccessor: return vscode.SymbolKind.Property;
@@ -32,6 +33,7 @@ const getSymbolKind = (kind: string): vscode.SymbolKind => {
 };
 
 class TypeScriptDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
+
 	public constructor(
 		private readonly client: ITypeScriptServiceClient,
 		private cachedResponse: CachedResponse<Proto.NavTreeResponse>,
@@ -45,23 +47,27 @@ class TypeScriptDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 
 		const args: Proto.FileRequestArgs = { file };
 		const response = await this.cachedResponse.execute(document, () => this.client.execute('navtree', args, token));
-		if (response.type !== 'response' || !response.body) {
+		if (response.type !== 'response' || !response.body?.childItems) {
 			return undefined;
 		}
 
-		let tree = response.body;
-		if (tree && tree.childItems) {
-			// The root represents the file. Ignore this when showing in the UI
-			const result: vscode.DocumentSymbol[] = [];
-			tree.childItems.forEach(item => TypeScriptDocumentSymbolProvider.convertNavTree(document.uri, result, item));
-			return result;
+		// The root represents the file. Ignore this when showing in the UI
+		const result: vscode.DocumentSymbol[] = [];
+		for (const item of response.body.childItems) {
+			TypeScriptDocumentSymbolProvider.convertNavTree(document.uri, result, item);
 		}
-
-		return undefined;
+		return result;
 	}
 
-	private static convertNavTree(resource: vscode.Uri, bucket: vscode.DocumentSymbol[], item: Proto.NavigationTree): boolean {
+	private static convertNavTree(
+		resource: vscode.Uri,
+		output: vscode.DocumentSymbol[],
+		item: Proto.NavigationTree,
+	): boolean {
 		let shouldInclude = TypeScriptDocumentSymbolProvider.shouldInclueEntry(item);
+		if (!shouldInclude && !item.childItems?.length) {
+			return false;
+		}
 
 		const children = new Set(item.childItems || []);
 		for (const span of item.spans) {
@@ -74,6 +80,12 @@ class TypeScriptDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 				range,
 				range.contains(selectionRange) ? selectionRange : range);
 
+
+			const kindModifiers = parseKindModifier(item.kindModifiers);
+			if (kindModifiers.has(PConst.KindModifiers.depreacted)) {
+				symbolInfo.tags = [vscode.SymbolTag.Deprecated];
+			}
+
 			for (const child of children) {
 				if (child.spans.some(span => !!range.intersection(typeConverters.Range.fromTextSpan(span)))) {
 					const includedChild = TypeScriptDocumentSymbolProvider.convertNavTree(resource, symbolInfo.children, child);
@@ -83,7 +95,7 @@ class TypeScriptDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 			}
 
 			if (shouldInclude) {
-				bucket.push(symbolInfo);
+				output.push(symbolInfo);
 			}
 		}
 
@@ -97,7 +109,6 @@ class TypeScriptDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 		return !!(item.text && item.text !== '<function>' && item.text !== '<class>');
 	}
 }
-
 
 export function register(
 	selector: vscode.DocumentSelector,

@@ -17,7 +17,7 @@ const jsTsLanguageConfiguration: vscode.LanguageConfiguration = {
 		decreaseIndentPattern: /^((?!.*?\/\*).*\*\/)?\s*[\}\]].*$/,
 		increaseIndentPattern: /^((?!\/\/).)*(\{[^}"'`]*|\([^)"'`]*|\[[^\]"'`]*)$/
 	},
-	wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+	wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
 	onEnterRules: [
 		{
 			// e.g. /** | */
@@ -31,7 +31,7 @@ const jsTsLanguageConfiguration: vscode.LanguageConfiguration = {
 		}, {
 			// e.g.  * ...|
 			beforeText: /^(\t|[ ])*[ ]\*([ ]([^\*]|\*(?!\/))*)?$/,
-			oneLineAboveText: /^(\s*(\/\*\*|\*)).*/,
+			oneLineAboveText: /(?=^(\s*(\/\*\*|\*)).*)(?=(?!(\s*\*\/)))/,
 			action: { indentAction: vscode.IndentAction.None, appendText: '* ' },
 		}, {
 			// e.g.  */|

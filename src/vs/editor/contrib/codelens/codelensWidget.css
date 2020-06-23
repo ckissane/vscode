@@ -23,17 +23,15 @@
 }
 
 .monaco-editor .codelens-decoration > a:hover {
-	text-decoration: underline;
 	cursor: pointer;
 }
 
 .monaco-editor .codelens-decoration .codicon {
-	line-height: inherit;
-	font-size: inherit;
+	vertical-align: middle;
+	color: currentColor !important;
 }
 
 .monaco-editor .codelens-decoration > a:hover .codicon::before {
-	text-decoration: underline;
 	cursor: pointer;
 }
 

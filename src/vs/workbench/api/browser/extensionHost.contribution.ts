@@ -41,6 +41,7 @@ import './mainThreadMessageService';
 import './mainThreadOutputService';
 import './mainThreadProgress';
 import './mainThreadQuickOpen';
+import './mainThreadRemoteConnectionData';
 import './mainThreadSaveParticipant';
 import './mainThreadSCM';
 import './mainThreadSearch';
@@ -48,6 +49,7 @@ import './mainThreadStatusBar';
 import './mainThreadStorage';
 import './mainThreadTelemetry';
 import './mainThreadTerminalService';
+import './mainThreadTheming';
 import './mainThreadTreeViews';
 import './mainThreadDownloadService';
 import './mainThreadUrls';
@@ -55,9 +57,12 @@ import './mainThreadWindow';
 import './mainThreadWebview';
 import './mainThreadWorkspace';
 import './mainThreadComments';
+import './mainThreadNotebook';
 import './mainThreadTask';
 import './mainThreadLabelService';
 import './mainThreadTunnelService';
+import './mainThreadAuthentication';
+import './mainThreadTimeline';
 import 'vs/workbench/api/common/apiCommands';
 
 export class ExtensionPoints implements IWorkbenchContribution {

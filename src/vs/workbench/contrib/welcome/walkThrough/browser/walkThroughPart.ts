@@ -39,6 +39,7 @@ import { Dimension, size } from 'vs/base/browser/dom';
 import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { domEvent } from 'vs/base/browser/event';
+import { EndOfLinePreference } from 'vs/editor/common/model';
 
 export const WALK_THROUGH_FOCUS = new RawContextKey<boolean>('interactivePlaygroundFocus', false);
 
@@ -278,8 +279,8 @@ export class WalkThroughPart extends BaseEditor {
 					return;
 				}
 
-				const content = model.main.textEditorModel.getLinesContent().join('\n');
-				if (!strings.endsWith(input.getResource().path, '.md')) {
+				const content = model.main.textEditorModel.getValue(EndOfLinePreference.LF);
+				if (!strings.endsWith(input.resource.path, '.md')) {
 					this.content.innerHTML = content;
 					this.updateSizeClasses();
 					this.decorateContent();
@@ -308,7 +309,7 @@ export class WalkThroughPart extends BaseEditor {
 				model.snippets.forEach((snippet, i) => {
 					const model = snippet.textEditorModel;
 					const id = `snippet-${model.uri.fragment}`;
-					const div = innerContent.querySelector(`#${id.replace(/\./g, '\\.')}`) as HTMLElement;
+					const div = innerContent.querySelector(`#${id.replace(/[\\.]/g, '\\$&')}`) as HTMLElement;
 
 					const options = this.getEditorOptions(snippet.textEditorModel.getModeId());
 					const telemetryData = {
@@ -421,10 +422,11 @@ export class WalkThroughPart extends BaseEditor {
 				horizontal: 'auto',
 				useShadows: true,
 				verticalHasArrows: false,
-				horizontalHasArrows: false
+				horizontalHasArrows: false,
+				alwaysConsumeMouseWheel: false
 			},
 			overviewRulerLanes: 3,
-			fixedOverflowWidgets: true,
+			fixedOverflowWidgets: false,
 			lineNumbersMinChars: 1,
 			minimap: { enabled: false },
 		};

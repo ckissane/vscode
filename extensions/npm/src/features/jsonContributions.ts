@@ -30,8 +30,8 @@ export interface IJSONContribution {
 	resolveSuggestion?(item: CompletionItem): Thenable<CompletionItem | null> | null;
 }
 
-export function addJSONProviders(xhr: XHRRequest): Disposable {
-	const contributions = [new PackageJSONContribution(xhr), new BowerJSONContribution(xhr)];
+export function addJSONProviders(xhr: XHRRequest, canRunNPM: boolean): Disposable {
+	const contributions = [new PackageJSONContribution(xhr, canRunNPM), new BowerJSONContribution(xhr)];
 	const subscriptions: Disposable[] = [];
 	contributions.forEach(contribution => {
 		const selector = contribution.getDocumentSelector();
@@ -111,7 +111,7 @@ export class JSONCompletionItemProvider implements CompletionItemProvider {
 			add: (suggestion: CompletionItem) => {
 				if (!proposed[suggestion.label]) {
 					proposed[suggestion.label] = true;
-					suggestion.range2 = { replacing: overwriteRange, inserting: new Range(overwriteRange.start, overwriteRange.start) };
+					suggestion.range = { replacing: overwriteRange, inserting: new Range(overwriteRange.start, overwriteRange.start) };
 					items.push(suggestion);
 				}
 			},

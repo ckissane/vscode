@@ -9,24 +9,22 @@ import * as glob from 'vs/base/common/glob';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import * as objects from 'vs/base/common/objects';
 import * as extpath from 'vs/base/common/extpath';
-import { getNLines } from 'vs/base/common/strings';
+import { fuzzyContains, getNLines } from 'vs/base/common/strings';
 import { URI, UriComponents } from 'vs/base/common/uri';
-import { IFilesConfiguration } from 'vs/platform/files/common/files';
-import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { IFilesConfiguration, FILES_EXCLUDE_CONFIG } from 'vs/platform/files/common/files';
+import { createDecorator, IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
 import { Event } from 'vs/base/common/event';
 import { relative } from 'vs/base/common/path';
-import { Extensions as ViewContainerExtensions, ViewContainer, IViewContainersRegistry, ViewContainerLocation } from 'vs/workbench/common/views';
-import { Registry } from 'vs/platform/registry/common/platform';
-import { localize } from 'vs/nls';
+import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { ResourceGlobMatcher } from 'vs/workbench/common/resources';
+import { isPromiseCanceledError } from 'vs/base/common/errors';
 
 export const VIEWLET_ID = 'workbench.view.search';
-export const PANEL_ID = 'workbench.view.search';
+export const PANEL_ID = 'workbench.panel.search';
 export const VIEW_ID = 'workbench.view.search';
-/**
- * Search viewlet container.
- */
-export const VIEW_CONTAINER: ViewContainer = Registry.as<IViewContainersRegistry>(ViewContainerExtensions.ViewContainersRegistry).registerViewContainer({ id: VIEWLET_ID, name: localize('name', "Search"), hideIfEmpty: true }, ViewContainerLocation.Sidebar);
+
+export const SEARCH_EXCLUDE_CONFIG = 'search.exclude';
 
 export const ISearchService = createDecorator<ISearchService>('searchService');
 
@@ -34,7 +32,7 @@ export const ISearchService = createDecorator<ISearchService>('searchService');
  * A service that enables to search for files or with in files.
  */
 export interface ISearchService {
-	_serviceBrand: undefined;
+	readonly _serviceBrand: undefined;
 	textSearch(query: ITextQuery, token?: CancellationToken, onProgress?: (result: ISearchProgressItem) => void): Promise<ISearchComplete>;
 	fileSearch(query: IFileQuery, token?: CancellationToken): Promise<ISearchComplete>;
 	clearCache(cacheKey: string): Promise<void>;
@@ -57,6 +55,7 @@ export interface ISearchResultProvider {
 
 export interface IFolderQuery<U extends UriComponents = URI> {
 	folder: U;
+	folderName?: string;
 	excludePattern?: glob.IExpression;
 	includePattern?: glob.IExpression;
 	fileEncoding?: string;
@@ -185,7 +184,7 @@ export function resultIsMatch(result: ITextSearchResult): result is ITextSearchM
 }
 
 export interface IProgressMessage {
-	message?: string;
+	message: string;
 }
 
 export type ISearchProgressItem = IFileMatch | IProgressMessage;
@@ -194,8 +193,8 @@ export function isFileMatch(p: ISearchProgressItem): p is IFileMatch {
 	return !!(<IFileMatch>p).resource;
 }
 
-export function isProgressMessage(p: ISearchProgressItem): p is IProgressMessage {
-	return !isFileMatch(p);
+export function isProgressMessage(p: ISearchProgressItem | ISerializedSearchProgressItem): p is IProgressMessage {
+	return !!(p as IProgressMessage).message;
 }
 
 export interface ISearchCompleteStats {
@@ -205,6 +204,12 @@ export interface ISearchCompleteStats {
 
 export interface ISearchComplete extends ISearchCompleteStats {
 	results: IFileMatch[];
+	exit?: SearchCompletionExitCode
+}
+
+export const enum SearchCompletionExitCode {
+	Normal,
+	NewSearchStarted
 }
 
 export interface ITextSearchStats {
@@ -340,9 +345,15 @@ export interface ISearchConfigurationProperties {
 	maintainFileSearchCache: boolean;
 	collapseResults: 'auto' | 'alwaysCollapse' | 'alwaysExpand';
 	searchOnType: boolean;
+	seedOnFocus: boolean;
+	seedWithNearestWord: boolean;
 	searchOnTypeDebouncePeriod: number;
-	enableSearchEditorPreview: boolean;
-	searchEditorPreviewForceAbsolutePaths: boolean;
+	searchEditor: {
+		doubleClickBehaviour: 'selectWord' | 'goToLocation' | 'openLocationToSide',
+		reusePriorSearchConfiguration: boolean,
+		defaultNumberOfContextLines: number | null,
+		experimental: {}
+	};
 	sortOrder: SearchSortOrder;
 }
 
@@ -371,6 +382,14 @@ export function getExcludes(configuration: ISearchConfiguration, includeSearchEx
 	allExcludes = objects.mixin(allExcludes, objects.deepClone(searchExcludes), true);
 
 	return allExcludes;
+}
+
+export function createResourceExcludeMatcher(instantiationService: IInstantiationService, configurationService: IConfigurationService): ResourceGlobMatcher {
+	return instantiationService.createInstance(
+		ResourceGlobMatcher,
+		root => getExcludes(root ? configurationService.getValue<ISearchConfiguration>({ resource: root }) : configurationService.getValue<ISearchConfiguration>()) || Object.create(null),
+		event => event.affectsConfiguration(FILES_EXCLUDE_CONFIG) || event.affectsConfiguration(SEARCH_EXCLUDE_CONFIG)
+	);
 }
 
 export function pathIncludedInQuery(queryProps: ICommonQueryProps<URI>, fsPath: string): boolean {
@@ -404,7 +423,8 @@ export enum SearchErrorCode {
 	globParseError,
 	invalidLiteral,
 	rgProcessError,
-	other
+	other,
+	canceled
 }
 
 export class SearchError extends Error {
@@ -413,7 +433,13 @@ export class SearchError extends Error {
 	}
 }
 
-export function deserializeSearchError(errorMsg: string): SearchError {
+export function deserializeSearchError(error: Error): SearchError {
+	const errorMsg = error.message;
+
+	if (isPromiseCanceledError(error)) {
+		return new SearchError(errorMsg, SearchErrorCode.canceled);
+	}
+
 	try {
 		const details = JSON.parse(errorMsg);
 		return new SearchError(details.message, details.code);
@@ -439,9 +465,19 @@ export interface IRawSearchService {
 
 export interface IRawFileMatch {
 	base?: string;
+	/**
+	 * The path of the file relative to the containing `base` folder.
+	 * This path is exactly as it appears on the filesystem.
+	 */
 	relativePath: string;
-	basename: string;
-	size?: number;
+	/**
+	 * This path is transformed for search purposes. For example, this could be
+	 * the `relativePath` with the workspace folder name prepended. This way the
+	 * search algorithm would also match against the name of the containing folder.
+	 *
+	 * If not given, the search algorithm should use `relativePath`.
+	 */
+	searchPath: string | undefined;
 }
 
 export interface ISearchEngine<T> {
@@ -486,6 +522,11 @@ export function isSerializedSearchSuccess(arg: ISerializedSearchComplete): arg i
 
 export function isSerializedFileMatch(arg: ISerializedSearchProgressItem): arg is ISerializedFileMatch {
 	return !!(<ISerializedFileMatch>arg).path;
+}
+
+export function isFilePatternMatch(candidate: IRawFileMatch, normalizedFilePatternLowercase: string): boolean {
+	const pathToMatch = candidate.searchPath ? candidate.searchPath : candidate.relativePath;
+	return fuzzyContains(pathToMatch, normalizedFilePatternLowercase);
 }
 
 export interface ISerializedFileMatch {
@@ -588,9 +629,7 @@ export class QueryGlobTester {
 	 * Guaranteed async.
 	 */
 	includedInQuery(testPath: string, basename?: string, hasSibling?: (name: string) => boolean | Promise<boolean>): Promise<boolean> {
-		const excludeP = this._parsedExcludeExpression ?
-			Promise.resolve(this._parsedExcludeExpression(testPath, basename, hasSibling)).then(result => !!result) :
-			Promise.resolve(false);
+		const excludeP = Promise.resolve(this._parsedExcludeExpression(testPath, basename, hasSibling)).then(result => !!result);
 
 		return excludeP.then(excluded => {
 			if (excluded) {

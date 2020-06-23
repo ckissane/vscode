@@ -12,7 +12,7 @@ import { MainContext, MainThreadTaskShape, ExtHostTaskShape } from 'vs/workbench
 
 import * as types from 'vs/workbench/api/common/extHostTypes';
 import { IExtHostWorkspaceProvider, IExtHostWorkspace } from 'vs/workbench/api/common/extHostWorkspace';
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 import * as tasks from '../common/shared/tasks';
 import { IExtHostDocumentsAndEditors } from 'vs/workbench/api/common/extHostDocumentsAndEditors';
 import { IExtHostConfiguration } from 'vs/workbench/api/common/extHostConfiguration';
@@ -25,6 +25,8 @@ import { createDecorator } from 'vs/platform/instantiation/common/instantiation'
 import { Schemas } from 'vs/base/common/network';
 import * as Platform from 'vs/base/common/platform';
 import { ILogService } from 'vs/platform/log/common/log';
+import { IExtHostApiDeprecationService } from 'vs/workbench/api/common/extHostApiDeprecationService';
+import { USER_TASKS_GROUP_KEY } from 'vs/workbench/contrib/tasks/common/taskService';
 
 export interface IExtHostTask extends ExtHostTaskShape {
 
@@ -191,9 +193,11 @@ export namespace CustomExecutionDTO {
 
 export namespace TaskHandleDTO {
 	export function from(value: types.Task): tasks.TaskHandleDTO {
-		let folder: UriComponents | undefined;
+		let folder: UriComponents | string;
 		if (value.scope !== undefined && typeof value.scope !== 'number') {
 			folder = value.scope.uri;
+		} else if (value.scope !== undefined && typeof value.scope === 'number') {
+			folder = USER_TASKS_GROUP_KEY;
 		}
 		return {
 			id: value._id!,
@@ -376,9 +380,11 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 	protected readonly _configurationService: IExtHostConfiguration;
 	protected readonly _terminalService: IExtHostTerminalService;
 	protected readonly _logService: ILogService;
+	protected readonly _deprecationService: IExtHostApiDeprecationService;
 	protected _handleCounter: number;
 	protected _handlers: Map<number, HandlerData>;
 	protected _taskExecutions: Map<string, TaskExecutionImpl>;
+	protected _taskExecutionPromises: Map<string, Promise<TaskExecutionImpl>>;
 	protected _providedCustomExecutions2: Map<string, types.CustomExecution>;
 	private _notProvidedCustomExecutions: Set<string>; // Used for custom executions tasks that are created and run through executeTask.
 	protected _activeCustomExecutions2: Map<string, types.CustomExecution>;
@@ -396,7 +402,8 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 		@IExtHostDocumentsAndEditors editorService: IExtHostDocumentsAndEditors,
 		@IExtHostConfiguration configurationService: IExtHostConfiguration,
 		@IExtHostTerminalService extHostTerminalService: IExtHostTerminalService,
-		@ILogService logService: ILogService
+		@ILogService logService: ILogService,
+		@IExtHostApiDeprecationService deprecationService: IExtHostApiDeprecationService
 	) {
 		this._proxy = extHostRpc.getProxy(MainContext.MainThreadTask);
 		this._workspaceProvider = workspaceService;
@@ -406,10 +413,12 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 		this._handleCounter = 0;
 		this._handlers = new Map<number, HandlerData>();
 		this._taskExecutions = new Map<string, TaskExecutionImpl>();
+		this._taskExecutionPromises = new Map<string, Promise<TaskExecutionImpl>>();
 		this._providedCustomExecutions2 = new Map<string, types.CustomExecution>();
 		this._notProvidedCustomExecutions = new Set<string>();
 		this._activeCustomExecutions2 = new Map<string, types.CustomExecution>();
 		this._logService = logService;
+		this._deprecationService = deprecationService;
 	}
 
 	public registerTaskProvider(extension: IExtensionDescription, type: string, provider: vscode.TaskProvider): vscode.Disposable {
@@ -489,6 +498,7 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 
 	public async $OnDidEndTask(execution: tasks.TaskExecutionDTO): Promise<void> {
 		const _execution = await this.getTaskExecution(execution);
+		this._taskExecutionPromises.delete(execution.id);
 		this._taskExecutions.delete(execution.id);
 		this.customExecutionComplete(execution);
 		this._onDidTerminateTask.fire({
@@ -502,12 +512,10 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 
 	public async $onDidStartTaskProcess(value: tasks.TaskProcessStartedDTO): Promise<void> {
 		const execution = await this.getTaskExecution(value.id);
-		if (execution) {
-			this._onDidTaskProcessStarted.fire({
-				execution: execution,
-				processId: value.processId
-			});
-		}
+		this._onDidTaskProcessStarted.fire({
+			execution: execution,
+			processId: value.processId
+		});
 	}
 
 	public get onDidEndTaskProcess(): Event<vscode.TaskProcessEndEvent> {
@@ -516,12 +524,10 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 
 	public async $onDidEndTaskProcess(value: tasks.TaskProcessEndedDTO): Promise<void> {
 		const execution = await this.getTaskExecution(value.id);
-		if (execution) {
-			this._onDidTaskProcessEnded.fire({
-				execution: execution,
-				exitCode: value.exitCode
-			});
-		}
+		this._onDidTaskProcessEnded.fire({
+			execution: execution,
+			exitCode: value.exitCode
+		});
 	}
 
 	protected abstract provideTasksInternal(validTypes: { [key: string]: boolean; }, taskIdPromises: Promise<void>[], handler: HandlerData, value: vscode.Task[] | null | undefined): { tasks: tasks.TaskDTO[], extension: IExtensionDescription };
@@ -576,6 +582,8 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 			return;
 		}
 
+		this.checkDeprecation(resolvedTask, handler);
+
 		const resolvedTaskDTO: tasks.TaskDTO | undefined = TaskDTO.from(resolvedTask, handler.extension);
 		if (!resolvedTaskDTO) {
 			throw new Error('Unexpected: Task cannot be resolved.');
@@ -610,24 +618,40 @@ export abstract class ExtHostTaskBase implements ExtHostTaskShape {
 
 	protected async getTaskExecution(execution: tasks.TaskExecutionDTO | string, task?: vscode.Task): Promise<TaskExecutionImpl> {
 		if (typeof execution === 'string') {
-			const taskExecution = this._taskExecutions.get(execution);
+			const taskExecution = this._taskExecutionPromises.get(execution);
 			if (!taskExecution) {
 				throw new Error('Unexpected: The specified task is missing an execution');
 			}
 			return taskExecution;
 		}
 
-		let result: TaskExecutionImpl | undefined = this._taskExecutions.get(execution.id);
+		let result: Promise<TaskExecutionImpl> | undefined = this._taskExecutionPromises.get(execution.id);
 		if (result) {
 			return result;
 		}
-		const taskToCreate = task ? task : await TaskDTO.to(execution.task, this._workspaceProvider);
-		if (!taskToCreate) {
-			throw new Error('Unexpected: Task does not exist.');
+		const createdResult: Promise<TaskExecutionImpl> = new Promise(async (resolve, reject) => {
+			const taskToCreate = task ? task : await TaskDTO.to(execution.task, this._workspaceProvider);
+			if (!taskToCreate) {
+				reject('Unexpected: Task does not exist.');
+			} else {
+				resolve(new TaskExecutionImpl(this, execution.id, taskToCreate));
+			}
+		});
+
+		this._taskExecutionPromises.set(execution.id, createdResult);
+		return createdResult.then(executionCreatedResult => {
+			this._taskExecutions.set(execution.id, executionCreatedResult);
+			return executionCreatedResult;
+		}, rejected => {
+			return Promise.reject(rejected);
+		});
+	}
+
+	protected checkDeprecation(task: vscode.Task, handler: HandlerData) {
+		const tTask = (task as types.Task);
+		if (tTask._deprecated) {
+			this._deprecationService.report('Task.constructor', handler.extension, 'Use the Task constructor that takes a `scope` instead.');
 		}
-		const createdResult: TaskExecutionImpl = new TaskExecutionImpl(this, execution.id, taskToCreate);
-		this._taskExecutions.set(execution.id, createdResult);
-		return createdResult;
 	}
 
 	private customExecutionComplete(execution: tasks.TaskExecutionDTO): void {
@@ -666,9 +690,10 @@ export class WorkerExtHostTask extends ExtHostTaskBase {
 		@IExtHostDocumentsAndEditors editorService: IExtHostDocumentsAndEditors,
 		@IExtHostConfiguration configurationService: IExtHostConfiguration,
 		@IExtHostTerminalService extHostTerminalService: IExtHostTerminalService,
-		@ILogService logService: ILogService
+		@ILogService logService: ILogService,
+		@IExtHostApiDeprecationService deprecationService: IExtHostApiDeprecationService
 	) {
-		super(extHostRpc, initData, workspaceService, editorService, configurationService, extHostTerminalService, logService);
+		super(extHostRpc, initData, workspaceService, editorService, configurationService, extHostTerminalService, logService, deprecationService);
 		if (initData.remote.isRemote && initData.remote.authority) {
 			this.registerTaskSystem(Schemas.vscodeRemote, {
 				scheme: Schemas.vscodeRemote,
@@ -681,7 +706,7 @@ export class WorkerExtHostTask extends ExtHostTaskBase {
 	public async executeTask(extension: IExtensionDescription, task: vscode.Task): Promise<vscode.TaskExecution> {
 		const dto = TaskDTO.from(task, extension);
 		if (dto === undefined) {
-			return Promise.reject(new Error('Task is not valid'));
+			throw new Error('Task is not valid');
 		}
 
 		// If this task is a custom execution, then we need to save it away
@@ -693,13 +718,17 @@ export class WorkerExtHostTask extends ExtHostTaskBase {
 			throw new Error('Not implemented');
 		}
 
-		return this._proxy.$executeTask(dto).then(value => this.getTaskExecution(value, task));
+		// Always get the task execution first to prevent timing issues when retrieving it later
+		const execution = await this.getTaskExecution(await this._proxy.$getTaskExecution(dto), task);
+		this._proxy.$executeTask(dto).catch(error => { throw new Error(error); });
+		return execution;
 	}
 
 	protected provideTasksInternal(validTypes: { [key: string]: boolean; }, taskIdPromises: Promise<void>[], handler: HandlerData, value: vscode.Task[] | null | undefined): { tasks: tasks.TaskDTO[], extension: IExtensionDescription } {
 		const taskDTOs: tasks.TaskDTO[] = [];
 		if (value) {
 			for (let task of value) {
+				this.checkDeprecation(task, handler);
 				if (!task.definition || !validTypes[task.definition.type]) {
 					this._logService.warn(`The task [${task.source}, ${task.name}] uses an undefined task type. The task will be ignored in the future.`);
 				}

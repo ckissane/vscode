@@ -5,16 +5,15 @@
 
 import { ISignService } from 'vs/platform/sign/common/sign';
 
-/* tslint:disable */
-
 declare module vsda {
+	// eslint-disable-next-line @typescript-eslint/naming-convention
 	export class signer {
 		sign(arg: any): any;
 	}
 }
 
 export class SignService implements ISignService {
-	_serviceBrand: undefined;
+	declare readonly _serviceBrand: undefined;
 
 	private vsda(): Promise<typeof vsda> {
 		return new Promise((resolve, reject) => require(['vsda'], resolve, reject));

@@ -7,14 +7,11 @@ import { addDisposableListener } from 'vs/base/browser/dom';
 import { streamToBuffer } from 'vs/base/common/buffer';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { Schemas } from 'vs/base/common/network';
-import { isWeb } from 'vs/base/common/platform';
 import { URI } from 'vs/base/common/uri';
-import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { IFileService } from 'vs/platform/files/common/files';
 import { ILogService } from 'vs/platform/log/common/log';
+import { INotificationService } from 'vs/platform/notification/common/notification';
 import { IRemoteAuthorityResolverService } from 'vs/platform/remote/common/remoteAuthorityResolver';
-import { REMOTE_HOST_SCHEME } from 'vs/platform/remote/common/remoteHosts';
 import { ITunnelService } from 'vs/platform/remote/common/tunnel';
 import { IRequestService } from 'vs/platform/request/common/request';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
@@ -34,21 +31,16 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 		contentOptions: WebviewContentOptions,
 		extension: WebviewExtensionDescription | undefined,
 		webviewThemeDataProvider: WebviewThemeDataProvider,
+		@INotificationService notificationService: INotificationService,
 		@ITunnelService tunnelService: ITunnelService,
 		@IFileService private readonly fileService: IFileService,
 		@IRequestService private readonly requestService: IRequestService,
-		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@ITelemetryService telemetryService: ITelemetryService,
-		@IEnvironmentService environmentService: IEnvironmentService,
-		@IWorkbenchEnvironmentService private readonly _workbenchEnvironmentService: IWorkbenchEnvironmentService,
+		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
 		@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 		@ILogService logService: ILogService,
 	) {
-		super(id, options, contentOptions, extension, webviewThemeDataProvider, logService, telemetryService, environmentService, _workbenchEnvironmentService);
-
-		if (!this.useExternalEndpoint && (!_workbenchEnvironmentService.options || typeof _workbenchEnvironmentService.webviewExternalEndpoint !== 'string')) {
-			throw new Error('To use iframe based webviews, you must configure `environmentService.webviewExternalEndpoint`');
-		}
+		super(id, options, contentOptions, extension, webviewThemeDataProvider, notificationService, logService, telemetryService, environmentService);
 
 		this._portMappingManager = this._register(new WebviewPortMappingManager(
 			() => this.extension?.location,
@@ -59,7 +51,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 		this._register(this.on(WebviewMessageChannels.loadResource, (entry: any) => {
 			const rawPath = entry.path;
 			const normalizedPath = decodeURIComponent(rawPath);
-			const uri = URI.parse(normalizedPath.replace(/^\/(\w+)\/(.+)$/, (_, scheme, path) => scheme + ':/' + path));
+			const uri = URI.parse(normalizedPath.replace(/^\/([\w\-]+)\/(.+)$/, (_, scheme, path) => scheme + ':/' + path));
 			this.loadResource(rawPath, uri);
 		}));
 
@@ -67,7 +59,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 			this.localLocalhost(entry.origin);
 		}));
 
-		this.element!.setAttribute('src', `${this.externalEndpoint}/index.html?id=${this.id}`);
+		this.initElement(extension, options);
 	}
 
 	protected createElement(options: WebviewOptions, _contentOptions: WebviewContentOptions) {
@@ -75,23 +67,24 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 		// Wait the end of the ctor when all listeners have been hooked up.
 		const element = document.createElement('iframe');
 		element.className = `webview ${options.customClasses || ''}`;
-		element.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-forms');
+		element.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-pointer-lock');
 		element.style.border = 'none';
 		element.style.width = '100%';
 		element.style.height = '100%';
 		return element;
 	}
 
+	protected initElement(extension: WebviewExtensionDescription | undefined, options: WebviewOptions) {
+		// The extensionId and purpose in the URL are used for filtering in js-debug:
+		this.element!.setAttribute('src', `${this.externalEndpoint}/index.html?id=${this.id}&extensionId=${extension?.id.value ?? ''}&purpose=${options.purpose}`);
+	}
+
 	private get externalEndpoint(): string {
-		const endpoint = this.workbenchEnvironmentService.webviewExternalEndpoint!.replace('{{uuid}}', this.id);
+		const endpoint = this.environmentService.webviewExternalEndpoint!.replace('{{uuid}}', this.id);
 		if (endpoint[endpoint.length - 1] === '/') {
 			return endpoint.slice(0, endpoint.length - 1);
 		}
 		return endpoint;
-	}
-
-	private get useExternalEndpoint(): boolean {
-		return isWeb || this._configurationService.getValue<boolean>('webview.experimental.useExternalEndpoint');
 	}
 
 	public mountTo(parent: HTMLElement) {
@@ -104,7 +97,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 		super.html = this.preprocessHtml(value);
 	}
 
-	private preprocessHtml(value: string): string {
+	protected preprocessHtml(value: string): string {
 		return value
 			.replace(/(["'])(?:vscode-resource):(\/\/([^\s\/'"]+?)(?=\/))?([^\s'"]+?)(["'])/gi, (match, startQuote, _1, scheme, path, endQuote) => {
 				if (scheme) {
@@ -120,7 +113,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 			});
 	}
 
-	protected get extraContentOptions() {
+	protected get extraContentOptions(): any {
 		return {
 			endpoint: this.externalEndpoint,
 		};
@@ -146,17 +139,17 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 
 	private async loadResource(requestPath: string, uri: URI) {
 		try {
-			const remoteAuthority = this._workbenchEnvironmentService.configuration.remoteAuthority;
+			const remoteAuthority = this.environmentService.remoteAuthority;
 			const remoteConnectionData = remoteAuthority ? this._remoteAuthorityResolverService.getConnectionData(remoteAuthority) : null;
 			const extensionLocation = this.extension?.location;
 
 			// If we are loading a file resource from a remote extension, rewrite the uri to go remote
 			let rewriteUri: undefined | ((uri: URI) => URI);
-			if (extensionLocation?.scheme === REMOTE_HOST_SCHEME) {
+			if (extensionLocation?.scheme === Schemas.vscodeRemote) {
 				rewriteUri = (uri) => {
-					if (uri.scheme === Schemas.file && extensionLocation?.scheme === REMOTE_HOST_SCHEME) {
+					if (uri.scheme === Schemas.file && extensionLocation?.scheme === Schemas.vscodeRemote) {
 						return URI.from({
-							scheme: REMOTE_HOST_SCHEME,
+							scheme: Schemas.vscodeRemote,
 							authority: extensionLocation.authority,
 							path: '/vscode-resource',
 							query: JSON.stringify({
@@ -173,7 +166,9 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 				roots: this.content.options.localResourceRoots || [],
 				remoteConnectionData,
 				rewriteUri,
-			}, this.fileService, this.requestService);
+			}, {
+				readFileStream: (resource) => this.fileService.readFileStream(resource).then(x => x.value),
+			}, this.requestService);
 
 			if (result.type === WebviewResourceResponse.Type.Success) {
 				const { buffer } = await streamToBuffer(result.stream);
@@ -184,7 +179,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 					data: buffer,
 				});
 			}
-		} catch  {
+		} catch {
 			// noop
 		}
 
@@ -195,7 +190,7 @@ export class IFrameWebview extends BaseWebview<HTMLIFrameElement> implements Web
 	}
 
 	private async localLocalhost(origin: string) {
-		const authority = this._workbenchEnvironmentService.configuration.remoteAuthority;
+		const authority = this.environmentService.remoteAuthority;
 		const resolveAuthority = authority ? await this._remoteAuthorityResolverService.resolveAuthority(authority) : undefined;
 		const redirect = resolveAuthority ? await this._portMappingManager.getRedirect(resolveAuthority.authority, origin) : undefined;
 		return this._send('did-load-localhost', {

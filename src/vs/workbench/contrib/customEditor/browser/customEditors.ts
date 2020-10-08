@@ -29,7 +29,7 @@ import { CONTEXT_CUSTOM_EDITORS, CONTEXT_FOCUSED_CUSTOM_EDITOR_IS_EDITABLE, Cust
 import { CustomEditorModelManager } from 'vs/workbench/contrib/customEditor/common/customEditorModelManager';
 import { IWebviewService, webviewHasOwnEditFunctionsContext } from 'vs/workbench/contrib/webview/browser/webview';
 import { IEditorGroup, IEditorGroupsService } from 'vs/workbench/services/editor/common/editorGroupsService';
-import { CustomEditorAssociation, CustomEditorsAssociations, customEditorsAssociationsSettingId, defaultEditorOverrideEntry } from 'vs/workbench/services/editor/common/editorOpenWith';
+import { CustomEditorAssociation, CustomEditorsAssociations, customEditorsAssociationsSettingId } from 'vs/workbench/services/editor/common/editorOpenWith';
 import { ICustomEditorInfo, ICustomEditorViewTypesHandler, IEditorService, IOpenEditorOverride, IOpenEditorOverrideEntry } from 'vs/workbench/services/editor/common/editorService';
 import { ContributedCustomEditors, defaultCustomEditor } from '../common/contributedCustomEditors';
 import { CustomEditorInput } from './customEditorInput';
@@ -96,10 +96,13 @@ export class CustomEditorService extends Disposable implements ICustomEditorServ
 		return [...this._contributedEditors];
 	}
 
-	private withActiveCustomEditor(f: (editor: CustomEditorInput) => void): boolean {
+	private withActiveCustomEditor(f: (editor: CustomEditorInput) => void | Promise<void>): boolean | Promise<void> {
 		const activeEditor = this.editorService.activeEditor;
 		if (activeEditor instanceof CustomEditorInput) {
-			f(activeEditor);
+			const result = f(activeEditor);
+			if (result) {
+				return result;
+			}
 			return true;
 		}
 		return false;
@@ -451,30 +454,33 @@ export class CustomEditorContribution extends Disposable implements IWorkbenchCo
 			open: (editor, options, group) => {
 				return this.onEditorOpening(editor, options, group);
 			},
-			getEditorOverrides: (resource: URI, _options: IEditorOptions | undefined, group: IEditorGroup | undefined): IOpenEditorOverrideEntry[] => {
+			getEditorOverrides: (resource: URI, options: IEditorOptions | undefined, group: IEditorGroup | undefined): IOpenEditorOverrideEntry[] => {
 				const currentEditor = group?.editors.find(editor => isEqual(editor.resource, resource));
 
+				const toOverride = (entry: CustomEditorInfo): IOpenEditorOverrideEntry => {
+					return {
+						id: entry.id,
+						active: currentEditor instanceof CustomEditorInput && currentEditor.viewType === entry.id,
+						label: entry.displayName,
+						detail: entry.providerDisplayName,
+					};
+				};
+
+				if (typeof options?.override === 'string') {
+					// A specific override was requested. Only return it.
+					const matchingEditor = this.customEditorService.getCustomEditor(options.override);
+					return matchingEditor ? [toOverride(matchingEditor)] : [];
+				}
+
+				// Otherwise, return all potential overrides.
 				const customEditors = this.customEditorService.getAllCustomEditors(resource);
 				if (!customEditors.length) {
 					return [];
 				}
 
-				return [
-					{
-						...defaultEditorOverrideEntry,
-						active: this._fileEditorInputFactory.isFileEditorInput(currentEditor),
-					},
-					...customEditors.allEditors
-						.filter(entry => entry.id !== defaultCustomEditor.id)
-						.map(entry => {
-							return {
-								id: entry.id,
-								active: currentEditor instanceof CustomEditorInput && currentEditor.viewType === entry.id,
-								label: entry.displayName,
-								detail: entry.providerDisplayName,
-							};
-						})
-				];
+				return customEditors.allEditors
+					.filter(entry => entry.id !== defaultCustomEditor.id)
+					.map(toOverride);
 			}
 		}));
 	}
@@ -533,6 +539,11 @@ export class CustomEditorContribution extends Disposable implements IWorkbenchCo
 		// If there is, we want to open that instead of creating a new editor.
 		// This ensures that we preserve whatever type of editor was previously being used
 		// when the user switches back to it.
+		const strictMatchEditorInput = group.editors.find(e => e === editor && !this._fileEditorInputFactory.isFileEditorInput(e));
+		if (strictMatchEditorInput) {
+			return;
+		}
+
 		const existingEditorForResource = group.editors.find(editor => isEqual(resource, editor.resource));
 		if (existingEditorForResource) {
 			if (editor === existingEditorForResource) {

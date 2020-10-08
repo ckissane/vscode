@@ -14,7 +14,7 @@ import { ConfigurationScope, IConfigurationRegistry, Extensions as Configuration
 import { Registry } from 'vs/platform/registry/common/platform';
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { distinct } from 'vs/base/common/arrays';
-import { isEqualAuthority, extUri } from 'vs/base/common/resources';
+import { isEqual, isEqualAuthority } from 'vs/base/common/resources';
 import { INotificationService, Severity } from 'vs/platform/notification/common/notification';
 import { IFileService } from 'vs/platform/files/common/files';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
@@ -52,7 +52,8 @@ export abstract class AbstractWorkspaceEditingService implements IWorkspaceEditi
 			saveLabel: mnemonicButtonLabel(nls.localize('save', "Save")),
 			title: nls.localize('saveWorkspace', "Save Workspace"),
 			filters: WORKSPACE_FILTER,
-			defaultUri: this.fileDialogService.defaultWorkspacePath()
+			defaultUri: this.fileDialogService.defaultWorkspacePath(),
+			availableFileSystems: this.environmentService.remoteAuthority ? [Schemas.vscodeRemote] : undefined
 		});
 
 		if (!workspacePath) {
@@ -131,7 +132,7 @@ export abstract class AbstractWorkspaceEditingService implements IWorkspaceEditi
 
 	private async doAddFolders(foldersToAdd: IWorkspaceFolderCreationData[], index?: number, donotNotifyError: boolean = false): Promise<void> {
 		const state = this.contextService.getWorkbenchState();
-		const remoteAuthority = this.environmentService.configuration.remoteAuthority;
+		const remoteAuthority = this.environmentService.remoteAuthority;
 		if (remoteAuthority) {
 			// https://github.com/microsoft/vscode/issues/94191
 			foldersToAdd = foldersToAdd.filter(f => f.uri.scheme !== Schemas.file && (f.uri.scheme !== Schemas.vscodeRemote || isEqualAuthority(f.uri.authority, remoteAuthority)));
@@ -197,11 +198,14 @@ export abstract class AbstractWorkspaceEditingService implements IWorkspaceEditi
 			return;
 		}
 
-		const remoteAuthority = this.environmentService.configuration.remoteAuthority;
+		const remoteAuthority = this.environmentService.remoteAuthority;
 		const untitledWorkspace = await this.workspacesService.createUntitledWorkspace(folders, remoteAuthority);
 		if (path) {
-			await this.saveWorkspaceAs(untitledWorkspace, path);
-			await this.workspacesService.deleteUntitledWorkspace(untitledWorkspace); // https://github.com/microsoft/vscode/issues/100276
+			try {
+				await this.saveWorkspaceAs(untitledWorkspace, path);
+			} finally {
+				await this.workspacesService.deleteUntitledWorkspace(untitledWorkspace); // https://github.com/microsoft/vscode/issues/100276
+			}
 		} else {
 			path = untitledWorkspace.configPath;
 		}
@@ -216,7 +220,7 @@ export abstract class AbstractWorkspaceEditingService implements IWorkspaceEditi
 		}
 
 		// Allow to save the workspace of the current window
-		if (extUri.isEqual(workspaceIdentifier.configPath, path)) {
+		if (isEqual(workspaceIdentifier.configPath, path)) {
 			return this.saveWorkspace(workspaceIdentifier);
 		}
 
@@ -304,7 +308,7 @@ export abstract class AbstractWorkspaceEditingService implements IWorkspaceEditi
 		);
 	}
 
-	abstract async enterWorkspace(path: URI): Promise<void>;
+	abstract enterWorkspace(path: URI): Promise<void>;
 
 	protected async doEnterWorkspace(path: URI): Promise<IEnterWorkspaceResult | null> {
 		if (!!this.environmentService.extensionTestsLocationURI) {

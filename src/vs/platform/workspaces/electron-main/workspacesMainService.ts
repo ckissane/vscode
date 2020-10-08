@@ -5,7 +5,6 @@
 
 import { IWorkspaceIdentifier, hasWorkspaceFileExtension, UNTITLED_WORKSPACE_NAME, IResolvedWorkspace, IStoredWorkspaceFolder, isStoredWorkspaceFolder, IWorkspaceFolderCreationData, IUntitledWorkspaceInfo, getStoredWorkspaceFolder, IEnterWorkspaceResult, isUntitledWorkspace } from 'vs/platform/workspaces/common/workspaces';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { INativeEnvironmentService } from 'vs/platform/environment/node/environmentService';
 import { join, dirname } from 'vs/base/common/path';
 import { mkdirp, writeFile, rimrafSync, readdirSync, writeFileSync } from 'vs/base/node/pfs';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
@@ -76,7 +75,7 @@ export class WorkspacesMainService extends Disposable implements IWorkspacesMain
 	readonly onWorkspaceEntered: Event<IWorkspaceEnteredEvent> = this._onWorkspaceEntered.event;
 
 	constructor(
-		@IEnvironmentService private readonly environmentService: INativeEnvironmentService,
+		@IEnvironmentService private readonly environmentService: IEnvironmentService,
 		@ILogService private readonly logService: ILogService,
 		@IBackupMainService private readonly backupMainService: IBackupMainService,
 		@IDialogMainService private readonly dialogMainService: IDialogMainService
@@ -217,7 +216,7 @@ export class WorkspacesMainService extends Disposable implements IWorkspacesMain
 			rimrafSync(dirname(configPath));
 
 			// Mark Workspace Storage to be deleted
-			const workspaceStoragePath = join(this.environmentService.workspaceStorageHome, workspace.id);
+			const workspaceStoragePath = join(this.environmentService.workspaceStorageHome.fsPath, workspace.id);
 			if (existsSync(workspaceStoragePath)) {
 				writeFileSync(join(workspaceStoragePath, 'obsolete'), '');
 			}

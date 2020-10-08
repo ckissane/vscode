@@ -6,9 +6,8 @@
 import 'vs/css!./list';
 import { IDisposable, dispose, DisposableStore } from 'vs/base/common/lifecycle';
 import { isNumber } from 'vs/base/common/types';
-import { range, firstIndex, binarySearch } from 'vs/base/common/arrays';
+import { range, binarySearch } from 'vs/base/common/arrays';
 import { memoize } from 'vs/base/common/decorators';
-import * as DOM from 'vs/base/browser/dom';
 import * as platform from 'vs/base/common/platform';
 import { Gesture } from 'vs/base/browser/touch';
 import { KeyCode } from 'vs/base/common/keyCodes';
@@ -27,6 +26,7 @@ import { matchesPrefix } from 'vs/base/common/filters';
 import { IDragAndDropData } from 'vs/base/browser/dnd';
 import { alert } from 'vs/base/browser/ui/aria/aria';
 import { IThemable } from 'vs/base/common/styler';
+import { createStyleSheet } from 'vs/base/browser/dom';
 
 interface ITraitChangeEvent {
 	indexes: number[];
@@ -55,7 +55,7 @@ class TraitRenderer<T> implements IListRenderer<T, ITraitTemplateData>
 	}
 
 	renderElement(element: T, index: number, templateData: ITraitTemplateData): void {
-		const renderedElementIndex = firstIndex(this.renderedElements, el => el.templateData === templateData);
+		const renderedElementIndex = this.renderedElements.findIndex(el => el.templateData === templateData);
 
 		if (renderedElementIndex >= 0) {
 			const rendered = this.renderedElements[renderedElementIndex];
@@ -96,7 +96,7 @@ class TraitRenderer<T> implements IListRenderer<T, ITraitTemplateData>
 	}
 
 	disposeTemplate(templateData: ITraitTemplateData): void {
-		const index = firstIndex(this.renderedElements, el => el.templateData === templateData);
+		const index = this.renderedElements.findIndex(el => el.templateData === templateData);
 
 		if (index < 0) {
 			return;
@@ -137,11 +137,11 @@ class Trait<T> implements ISpliceable<boolean>, IDisposable {
 	}
 
 	renderIndex(index: number, container: HTMLElement): void {
-		DOM.toggleClass(container, this._trait, this.contains(index));
+		container.classList.toggle(this._trait, this.contains(index));
 	}
 
 	unrender(container: HTMLElement): void {
-		DOM.removeClass(container, this._trait);
+		container.classList.remove(this._trait);
 	}
 
 	/**
@@ -225,8 +225,24 @@ class TraitSpliceable<T> implements ISpliceable<T> {
 	}
 }
 
-function isInputElement(e: HTMLElement): boolean {
+export function isInputElement(e: HTMLElement): boolean {
 	return e.tagName === 'INPUT' || e.tagName === 'TEXTAREA';
+}
+
+export function isMonacoEditor(e: HTMLElement): boolean {
+	if (e.classList.contains('monaco-editor')) {
+		return true;
+	}
+
+	if (e.classList.contains('monaco-list')) {
+		return false;
+	}
+
+	if (!e.parentElement) {
+		return false;
+	}
+
+	return isMonacoEditor(e.parentElement);
 }
 
 class KeyboardController<T> implements IDisposable {
@@ -572,12 +588,20 @@ export class MouseController<T> implements IDisposable {
 	}
 
 	private onMouseDown(e: IListMouseEvent<T> | IListTouchEvent<T>): void {
+		if (isMonacoEditor(e.browserEvent.target as HTMLElement)) {
+			return;
+		}
+
 		if (document.activeElement !== e.browserEvent.target) {
 			this.list.domFocus();
 		}
 	}
 
 	private onContextMenu(e: IListContextMenuEvent<T>): void {
+		if (isMonacoEditor(e.browserEvent.target as HTMLElement)) {
+			return;
+		}
+
 		const focus = typeof e.index === 'undefined' ? [] : [e.index];
 		this.list.setFocus(focus, e.browserEvent);
 	}
@@ -587,7 +611,7 @@ export class MouseController<T> implements IDisposable {
 			return;
 		}
 
-		if (isInputElement(e.browserEvent.target as HTMLElement)) {
+		if (isInputElement(e.browserEvent.target as HTMLElement) || isMonacoEditor(e.browserEvent.target as HTMLElement)) {
 			return;
 		}
 
@@ -621,7 +645,7 @@ export class MouseController<T> implements IDisposable {
 	}
 
 	protected onDoubleClick(e: IListMouseEvent<T>): void {
-		if (isInputElement(e.browserEvent.target as HTMLElement)) {
+		if (isInputElement(e.browserEvent.target as HTMLElement) || isMonacoEditor(e.browserEvent.target as HTMLElement)) {
 			return;
 		}
 
@@ -800,10 +824,7 @@ export class DefaultStyleController implements IStyleController {
 			content.push(`.monaco-list-type-filter { box-shadow: 1px 1px 1px ${styles.listMatchesShadow}; }`);
 		}
 
-		const newStyles = content.join('\n');
-		if (newStyles !== this.styleElement.innerHTML) {
-			this.styleElement.innerHTML = newStyles;
-		}
+		this.styleElement.textContent = content.join('\n');
 	}
 }
 
@@ -830,6 +851,7 @@ export interface IListOptions<T> {
 	readonly horizontalScrolling?: boolean;
 	readonly additionalScrollHeight?: number;
 	readonly transformOptimization?: boolean;
+	readonly smoothScrolling?: boolean;
 }
 
 export interface IListStyles {
@@ -1203,7 +1225,7 @@ export class List<T> implements ISpliceable<T>, IThemable, IDisposable {
 		if (_options.styleController) {
 			this.styleController = _options.styleController(this.view.domId);
 		} else {
-			const styleElement = DOM.createStyleSheet(this.view.domNode);
+			const styleElement = createStyleSheet(this.view.domNode);
 			this.styleController = new DefaultStyleController(styleElement, this.view.domId);
 		}
 
@@ -1296,6 +1318,10 @@ export class List<T> implements ISpliceable<T>, IThemable, IDisposable {
 
 	element(index: number): T {
 		return this.view.element(index);
+	}
+
+	indexOf(element: T): number {
+		return this.view.indexOf(element);
 	}
 
 	get length(): number {
@@ -1607,7 +1633,7 @@ export class List<T> implements ISpliceable<T>, IThemable, IDisposable {
 
 	private _onFocusChange(): void {
 		const focus = this.focus.get();
-		DOM.toggleClass(this.view.domNode, 'element-focused', focus.length > 0);
+		this.view.domNode.classList.toggle('element-focused', focus.length > 0);
 		this.onDidChangeActiveDescendant();
 	}
 
@@ -1630,9 +1656,9 @@ export class List<T> implements ISpliceable<T>, IThemable, IDisposable {
 	private _onSelectionChange(): void {
 		const selection = this.selection.get();
 
-		DOM.toggleClass(this.view.domNode, 'selection-none', selection.length === 0);
-		DOM.toggleClass(this.view.domNode, 'selection-single', selection.length === 1);
-		DOM.toggleClass(this.view.domNode, 'selection-multiple', selection.length > 1);
+		this.view.domNode.classList.toggle('selection-none', selection.length === 0);
+		this.view.domNode.classList.toggle('selection-single', selection.length === 1);
+		this.view.domNode.classList.toggle('selection-multiple', selection.length > 1);
 	}
 
 	dispose(): void {

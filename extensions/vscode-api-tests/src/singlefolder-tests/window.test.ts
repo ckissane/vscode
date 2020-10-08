@@ -4,11 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { workspace, window, commands, ViewColumn, TextEditorViewColumnChangeEvent, Uri, Selection, Position, CancellationTokenSource, TextEditorSelectionChangeKind, QuickPickItem } from 'vscode';
+import { workspace, window, commands, ViewColumn, TextEditorViewColumnChangeEvent, Uri, Selection, Position, CancellationTokenSource, TextEditorSelectionChangeKind, QuickPickItem, TextEditor } from 'vscode';
 import { join } from 'path';
 import { closeAllEditors, pathEquals, createRandomFile } from '../utils';
 
-suite.only('vscode API - window', () => {
+
+suite('vscode API - window', () => {
 
 	teardown(closeAllEditors);
 
@@ -84,7 +85,7 @@ suite.only('vscode API - window', () => {
 
 			let [one, two] = editors;
 
-			await new Promise(resolve => {
+			await new Promise<void>(resolve => {
 				let registration2 = window.onDidChangeTextEditorViewColumn(event => {
 					actualEvent = event;
 					registration2.dispose();
@@ -119,7 +120,7 @@ suite.only('vscode API - window', () => {
 			let [, two] = editors;
 			two.show();
 
-			return new Promise(resolve => {
+			return new Promise<void>(resolve => {
 
 				let registration2 = window.onDidChangeTextEditorViewColumn(event => {
 					actualEvents.push(event);
@@ -146,6 +147,23 @@ suite.only('vscode API - window', () => {
 	});
 
 	test('active editor not always correct... #49125', async function () {
+		if (process.env['BUILD_SOURCEVERSION']) {
+			this.skip();
+			return;
+		}
+		function assertActiveEditor(editor: TextEditor) {
+			if (window.activeTextEditor === editor) {
+				assert.ok(true);
+				return;
+			}
+			function printEditor(editor: TextEditor): string {
+				return `doc: ${editor.document.uri.toString()}, column: ${editor.viewColumn}, active: ${editor === window.activeTextEditor}`;
+			}
+			const visible = window.visibleTextEditors.map(editor => printEditor(editor));
+			assert.ok(false, `ACTIVE editor should be ${printEditor(editor)}, BUT HAVING ${visible.join(', ')}`);
+
+		}
+
 		const randomFile1 = await createRandomFile();
 		const randomFile2 = await createRandomFile();
 
@@ -155,10 +173,10 @@ suite.only('vscode API - window', () => {
 		]);
 		for (let c = 0; c < 4; c++) {
 			let editorA = await window.showTextDocument(docA, ViewColumn.One);
-			assert.equal(window.activeTextEditor, editorA);
+			assertActiveEditor(editorA);
 
 			let editorB = await window.showTextDocument(docB, ViewColumn.Two);
-			assert.equal(window.activeTextEditor, editorB);
+			assertActiveEditor(editorB);
 		}
 	});
 
@@ -411,9 +429,11 @@ suite.only('vscode API - window', () => {
 	});
 
 	test('showQuickPick, select first two', async function () {
+		const label = 'showQuickPick, select first two';
+		let i = 0;
 		const resolves: ((value: string) => void)[] = [];
 		let done: () => void;
-		const unexpected = new Promise((resolve, reject) => {
+		const unexpected = new Promise<void>((resolve, reject) => {
 			done = () => resolve();
 			resolves.push(reject);
 		});
@@ -422,21 +442,31 @@ suite.only('vscode API - window', () => {
 			canPickMany: true
 		});
 		const first = new Promise(resolve => resolves.push(resolve));
-		await new Promise(resolve => setTimeout(resolve, 10)); // Allow UI to update.
+		console.log(`${label}: ${++i}`);
+		await new Promise(resolve => setTimeout(resolve, 100)); // Allow UI to update.
+		console.log(`${label}: ${++i}`);
 		await commands.executeCommand('workbench.action.quickOpenSelectNext');
+		console.log(`${label}: ${++i}`);
 		assert.equal(await first, 'eins');
+		console.log(`${label}: ${++i}`);
 		await commands.executeCommand('workbench.action.quickPickManyToggle');
+		console.log(`${label}: ${++i}`);
 		const second = new Promise(resolve => resolves.push(resolve));
 		await commands.executeCommand('workbench.action.quickOpenSelectNext');
+		console.log(`${label}: ${++i}`);
 		assert.equal(await second, 'zwei');
+		console.log(`${label}: ${++i}`);
 		await commands.executeCommand('workbench.action.quickPickManyToggle');
+		console.log(`${label}: ${++i}`);
 		await commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+		console.log(`${label}: ${++i}`);
 		assert.deepStrictEqual(await picks, ['eins', 'zwei']);
+		console.log(`${label}: ${++i}`);
 		done!();
 		return unexpected;
 	});
 
-	test('showQuickPick, keep selection (Microsoft/vscode-azure-account#67)', async function () {
+	test('showQuickPick, keep selection (microsoft/vscode-azure-account#67)', async function () {
 		const picks = window.showQuickPick([
 			{ label: 'eins' },
 			{ label: 'zwei', picked: true },
@@ -564,7 +594,7 @@ suite.only('vscode API - window', () => {
 	function createQuickPickTracker<T extends string | QuickPickItem>() {
 		const resolves: ((value: T) => void)[] = [];
 		let done: () => void;
-		const unexpected = new Promise((resolve, reject) => {
+		const unexpected = new Promise<void>((resolve, reject) => {
 			done = () => resolve();
 			resolves.push(reject);
 		});
@@ -583,7 +613,7 @@ suite.only('vscode API - window', () => {
 		return workspace.openTextDocument(join(workspace.rootPath || '', './far.js')).then(doc => window.showTextDocument(doc)).then(editor => {
 
 
-			return new Promise((resolve, _reject) => {
+			return new Promise<void>((resolve, _reject) => {
 
 				let subscription = window.onDidChangeTextEditorSelection(e => {
 					assert.ok(e.textEditor === editor);

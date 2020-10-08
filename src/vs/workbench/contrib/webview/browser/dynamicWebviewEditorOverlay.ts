@@ -39,7 +39,7 @@ export class DynamicWebviewEditorOverlay extends Disposable implements WebviewOv
 	private _findWidgetVisible: IContextKey<boolean>;
 
 	public constructor(
-		private readonly id: string,
+		public readonly id: string,
 		initialOptions: WebviewOptions,
 		initialContentOptions: WebviewContentOptions,
 		public readonly extension: WebviewExtensionDescription | undefined,
@@ -55,12 +55,16 @@ export class DynamicWebviewEditorOverlay extends Disposable implements WebviewOv
 		this._findWidgetVisible = KEYBINDING_CONTEXT_WEBVIEW_FIND_WIDGET_VISIBLE.bindTo(_contextKeyService);
 	}
 
-	private readonly _onDispose = this._register(new Emitter<void>());
-	public onDispose = this._onDispose.event;
+	public get isFocused() {
+		return !!this._webview.value?.isFocused;
+	}
+
+	private readonly _onDidDispose = this._register(new Emitter<void>());
+	public onDidDispose = this._onDidDispose.event;
 
 	dispose() {
 		this.container.remove();
-		this._onDispose.fire();
+		this._onDidDispose.fire();
 		super.dispose();
 	}
 
@@ -102,6 +106,7 @@ export class DynamicWebviewEditorOverlay extends Disposable implements WebviewOv
 		const frameRect = element.getBoundingClientRect();
 		const containerRect = this.container.parentElement.getBoundingClientRect();
 		this.container.style.position = 'absolute';
+		this.container.style.overflow = 'hidden';
 		this.container.style.top = `${frameRect.top - containerRect.top}px`;
 		this.container.style.left = `${frameRect.left - containerRect.left}px`;
 		this.container.style.width = `${dimension ? dimension.width : frameRect.width}px`;
@@ -218,6 +223,11 @@ export class DynamicWebviewEditorOverlay extends Disposable implements WebviewOv
 	focus(): void { this.withWebview(webview => webview.focus()); }
 	reload(): void { this.withWebview(webview => webview.reload()); }
 	selectAll(): void { this.withWebview(webview => webview.selectAll()); }
+	copy(): void { this.withWebview(webview => webview.copy()); }
+	paste(): void { this.withWebview(webview => webview.paste()); }
+	cut(): void { this.withWebview(webview => webview.cut()); }
+	undo(): void { this.withWebview(webview => webview.undo()); }
+	redo(): void { this.withWebview(webview => webview.redo()); }
 
 	showFind() {
 		if (this._webview.value) {

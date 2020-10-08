@@ -8,7 +8,7 @@ import { IDisposable } from 'vs/base/common/lifecycle';
 import { URI } from 'vs/base/common/uri';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import { ILogService } from 'vs/platform/log/common/log';
-import { IAddress } from 'vs/platform/remote/common/remoteAgentConnection';
+import { IAddressProvider } from 'vs/platform/remote/common/remoteAgentConnection';
 
 export const ITunnelService = createDecorator<ITunnelService>('tunnelService');
 
@@ -37,7 +37,7 @@ export interface ITunnelService {
 	readonly onTunnelOpened: Event<RemoteTunnel>;
 	readonly onTunnelClosed: Event<{ host: string, port: number }>;
 
-	openTunnel(resolveAuthority: IAddress | undefined, remoteHost: string | undefined, remotePort: number, localPort?: number): Promise<RemoteTunnel> | undefined;
+	openTunnel(addressProvider: IAddressProvider | undefined, remoteHost: string | undefined, remotePort: number, localPort?: number): Promise<RemoteTunnel> | undefined;
 	closeTunnel(remoteHost: string, remotePort: number): Promise<void>;
 	setTunnelProvider(provider: ITunnelProvider | undefined): IDisposable;
 }
@@ -56,7 +56,13 @@ export function extractLocalHostUriMetaDataForPortMapping(uri: URI): { address: 
 	};
 }
 
+export function isLocalhost(host: string): boolean {
+	return host === 'localhost' || host === '127.0.0.1';
+}
 
+function getOtherLocalhost(host: string): string | undefined {
+	return (host === 'localhost') ? '127.0.0.1' : ((host === '127.0.0.1') ? 'localhost' : undefined);
+}
 
 export abstract class AbstractTunnelService implements ITunnelService {
 	declare readonly _serviceBrand: undefined;
@@ -102,16 +108,16 @@ export abstract class AbstractTunnelService implements ITunnelService {
 		this._tunnels.clear();
 	}
 
-	openTunnel(resolvedAuthority: IAddress | undefined, remoteHost: string | undefined, remotePort: number, localPort: number): Promise<RemoteTunnel> | undefined {
-		if (!resolvedAuthority) {
+	openTunnel(addressProvider: IAddressProvider | undefined, remoteHost: string | undefined, remotePort: number, localPort: number): Promise<RemoteTunnel> | undefined {
+		if (!addressProvider) {
 			return undefined;
 		}
 
-		if (!remoteHost || (remoteHost === '127.0.0.1')) {
+		if (!remoteHost) {
 			remoteHost = 'localhost';
 		}
 
-		const resolvedTunnel = this.retainOrCreateTunnel(resolvedAuthority, remoteHost, remotePort, localPort);
+		const resolvedTunnel = this.retainOrCreateTunnel(addressProvider, remoteHost, remotePort, localPort);
 		if (!resolvedTunnel) {
 			return resolvedTunnel;
 		}
@@ -174,13 +180,29 @@ export abstract class AbstractTunnelService implements ITunnelService {
 		this._tunnels.get(remoteHost)!.set(remotePort, { refcount: 1, value: tunnel });
 	}
 
-	protected abstract retainOrCreateTunnel(resolveRemoteAuthority: IAddress, remoteHost: string, remotePort: number, localPort?: number): Promise<RemoteTunnel> | undefined;
+	protected getTunnelFromMap(remoteHost: string, remotePort: number): { refcount: number, readonly value: Promise<RemoteTunnel> } | undefined {
+		const otherLocalhost = getOtherLocalhost(remoteHost);
+		let portMap: Map<number, { refcount: number, readonly value: Promise<RemoteTunnel> }> | undefined;
+		if (otherLocalhost) {
+			const firstMap = this._tunnels.get(remoteHost);
+			const secondMap = this._tunnels.get(otherLocalhost);
+			if (firstMap && secondMap) {
+				portMap = new Map([...Array.from(firstMap.entries()), ...Array.from(secondMap.entries())]);
+			} else {
+				portMap = firstMap ?? secondMap;
+			}
+		} else {
+			portMap = this._tunnels.get(remoteHost);
+		}
+		return portMap ? portMap.get(remotePort) : undefined;
+	}
+
+	protected abstract retainOrCreateTunnel(addressProvider: IAddressProvider, remoteHost: string, remotePort: number, localPort?: number): Promise<RemoteTunnel> | undefined;
 }
 
 export class TunnelService extends AbstractTunnelService {
-	protected retainOrCreateTunnel(_resolveRemoteAuthority: IAddress, remoteHost: string, remotePort: number, localPort?: number | undefined): Promise<RemoteTunnel> | undefined {
-		const portMap = this._tunnels.get(remoteHost);
-		const existing = portMap ? portMap.get(remotePort) : undefined;
+	protected retainOrCreateTunnel(_addressProvider: IAddressProvider, remoteHost: string, remotePort: number, localPort?: number | undefined): Promise<RemoteTunnel> | undefined {
+		const existing = this.getTunnelFromMap(remoteHost, remotePort);
 		if (existing) {
 			++existing.refcount;
 			return existing.value;

@@ -5,18 +5,18 @@
 
 import 'vs/css!./media/extensionActions';
 import { localize } from 'vs/nls';
-import { IAction, Action } from 'vs/base/common/actions';
+import { IAction, Action, Separator, SubmenuAction } from 'vs/base/common/actions';
 import { Delayer } from 'vs/base/common/async';
 import * as DOM from 'vs/base/browser/dom';
 import { Event } from 'vs/base/common/event';
 import * as json from 'vs/base/common/json';
-import { ActionViewItem, Separator, IActionViewItemOptions } from 'vs/base/browser/ui/actionbar/actionbar';
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { dispose, Disposable } from 'vs/base/common/lifecycle';
-import { IExtension, ExtensionState, IExtensionsWorkbenchService, VIEWLET_ID, IExtensionsViewPaneContainer, AutoUpdateConfigurationKey, IExtensionContainer, EXTENSIONS_CONFIG, TOGGLE_IGNORE_EXTENSION_ACTION_ID } from 'vs/workbench/contrib/extensions/common/extensions';
+import { IExtension, ExtensionState, IExtensionsWorkbenchService, VIEWLET_ID, IExtensionsViewPaneContainer, AutoUpdateConfigurationKey, IExtensionContainer, TOGGLE_IGNORE_EXTENSION_ACTION_ID } from 'vs/workbench/contrib/extensions/common/extensions';
 import { ExtensionsConfigurationInitialContent } from 'vs/workbench/contrib/extensions/common/extensionsFileTemplate';
 import { IGalleryExtension, IExtensionGalleryService, INSTALL_ERROR_MALICIOUS, INSTALL_ERROR_INCOMPATIBLE, IGalleryExtensionVersion, ILocalExtension, INSTALL_ERROR_NOT_SUPPORTED } from 'vs/platform/extensionManagement/common/extensionManagement';
-import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionRecommendationsService, IExtensionsConfigContent, IExtensionManagementServer } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { IExtensionIgnoredRecommendationsService, IExtensionsConfigContent } from 'vs/workbench/services/extensionRecommendations/common/extensionRecommendations';
 import { areSameExtensions } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
 import { ExtensionType, ExtensionIdentifier, IExtensionDescription, IExtensionManifest, isLanguagePackExtension } from 'vs/platform/extensions/common/extensions';
 import { IInstantiationService, ServicesAccessor } from 'vs/platform/instantiation/common/instantiation';
@@ -36,7 +36,6 @@ import { Color } from 'vs/base/common/color';
 import { IJSONEditingService } from 'vs/workbench/services/configuration/common/jsonEditing';
 import { ITextEditorSelection } from 'vs/platform/editor/common/editor';
 import { ITextModelService } from 'vs/editor/common/services/resolverService';
-import { PagedModel } from 'vs/base/common/paging';
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
 import { IContextKeyService, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { MenuRegistry, MenuId, IMenuService } from 'vs/platform/actions/common/actions';
@@ -60,6 +59,9 @@ import { IProductService } from 'vs/platform/product/common/productService';
 import { IFileDialogService, IDialogService } from 'vs/platform/dialogs/common/dialogs';
 import { IProgressService, ProgressLocation } from 'vs/platform/progress/common/progress';
 import { Codicon } from 'vs/base/common/codicons';
+import { IViewsService } from 'vs/workbench/common/views';
+import { IActionViewItemOptions, ActionViewItem } from 'vs/base/browser/ui/actionbar/actionViewItems';
+import { EXTENSIONS_CONFIG } from 'vs/workbench/services/extensionRecommendations/common/workspaceExtensionsConfig';
 
 export function toExtensionDescription(local: ILocalExtension): IExtensionDescription {
 	return {
@@ -709,7 +711,7 @@ export class DropDownMenuActionViewItem extends ExtensionActionViewItem {
 	}
 }
 
-export function getContextMenuActions(menuService: IMenuService, contextKeyService: IContextKeyService, instantiationService: IInstantiationService, extension: IExtension | undefined | null): ExtensionAction[][] {
+export function getContextMenuActions(menuService: IMenuService, contextKeyService: IContextKeyService, instantiationService: IInstantiationService, extension: IExtension | undefined | null): IAction[][] {
 	const scopedContextKeyService = contextKeyService.createScoped();
 	if (extension) {
 		scopedContextKeyService.createKey<string>('extension', extension.identifier.id);
@@ -720,10 +722,16 @@ export function getContextMenuActions(menuService: IMenuService, contextKeyServi
 		}
 	}
 
-	const groups: ExtensionAction[][] = [];
+	const groups: IAction[][] = [];
 	const menu = menuService.createMenu(MenuId.ExtensionContext, scopedContextKeyService);
-	menu.getActions({ shouldForwardArgs: true }).forEach(([, actions]) => groups.push(actions.map(action => instantiationService.createInstance(MenuItemExtensionAction, action))));
+	menu.getActions({ shouldForwardArgs: true }).forEach(([, actions]) => groups.push(actions.map(action => {
+		if (action instanceof SubmenuAction) {
+			return action;
+		}
+		return instantiationService.createInstance(MenuItemExtensionAction, action);
+	})));
 	menu.dispose();
+	scopedContextKeyService.dispose();
 
 	return groups;
 }
@@ -751,7 +759,7 @@ export class ManageExtensionAction extends ExtensionDropDownAction {
 	}
 
 	async getActionGroups(runningExtensions: IExtensionDescription[]): Promise<IAction[][]> {
-		const groups: ExtensionAction[][] = [];
+		const groups: IAction[][] = [];
 		if (this.extension) {
 			const actions = await Promise.all([
 				SetColorThemeAction.create(this.workbenchThemeService, this.instantiationService, this.extension),
@@ -782,7 +790,11 @@ export class ManageExtensionAction extends ExtensionDropDownAction {
 
 		getContextMenuActions(this.menuService, this.contextKeyService, this.instantiationService, this.extension).forEach(actions => groups.push(actions));
 
-		groups.forEach(group => group.forEach(extensionAction => extensionAction.extension = this.extension));
+		groups.forEach(group => group.forEach(extensionAction => {
+			if (extensionAction instanceof ExtensionAction) {
+				extensionAction.extension = this.extension;
+			}
+		}));
 
 		return groups;
 	}
@@ -899,7 +911,7 @@ export class EnableForWorkspaceAction extends ExtensionAction {
 		if (this.extension && this.extension.local) {
 			this.enabled = this.extension.state === ExtensionState.Installed
 				&& !this.extensionEnablementService.isEnabled(this.extension.local)
-				&& this.extensionEnablementService.canChangeEnablement(this.extension.local);
+				&& this.extensionEnablementService.canChangeWorkspaceEnablement(this.extension.local);
 		}
 	}
 
@@ -960,7 +972,7 @@ export class DisableForWorkspaceAction extends ExtensionAction {
 		if (this.extension && this.extension.local && this.runningExtensions.some(e => areSameExtensions({ id: e.identifier.value, uuid: e.uuid }, this.extension!.identifier) && this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY)) {
 			this.enabled = this.extension.state === ExtensionState.Installed
 				&& (this.extension.enablementState === EnablementState.EnabledGlobally || this.extension.enablementState === EnablementState.EnabledWorkspace)
-				&& this.extensionEnablementService.canChangeEnablement(this.extension.local);
+				&& this.extensionEnablementService.canChangeWorkspaceEnablement(this.extension.local);
 		}
 	}
 
@@ -1082,7 +1094,6 @@ export class CheckForUpdatesAction extends Action {
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IWorkbenchExtensionEnablementService private readonly extensionEnablementService: IWorkbenchExtensionEnablementService,
 		@IViewletService private readonly viewletService: IViewletService,
-		@IDialogService private readonly dialogService: IDialogService,
 		@INotificationService private readonly notificationService: INotificationService
 	) {
 		super(id, label, '', true);
@@ -1091,7 +1102,7 @@ export class CheckForUpdatesAction extends Action {
 	private checkUpdatesAndNotify(): void {
 		const outdated = this.extensionsWorkbenchService.outdated;
 		if (!outdated.length) {
-			this.dialogService.show(Severity.Info, localize('noUpdatesAvailable', "All extensions are up to date."), [localize('ok', "OK")]);
+			this.notificationService.info(localize('noUpdatesAvailable', "All extensions are up to date."));
 			return;
 		}
 
@@ -1641,19 +1652,39 @@ export class ShowDisabledExtensionsAction extends Action {
 	}
 }
 
-export class ClearExtensionsInputAction extends Action {
+export class ClearExtensionsSearchResultsAction extends Action {
 
-	static readonly ID = 'workbench.extensions.action.clearExtensionsInput';
-	static readonly LABEL = localize('clearExtensionsInput', "Clear Extensions Input");
+	static readonly ID = 'workbench.extensions.action.clearExtensionsSearchResults';
+	static readonly LABEL = localize('clearExtensionsSearchResults', "Clear Extensions Search Results");
+
+	constructor(
+		id: string,
+		label: string,
+		@IViewsService private readonly viewsService: IViewsService
+	) {
+		super(id, label, 'codicon-clear-all', true);
+	}
+
+	async run(): Promise<void> {
+		const viewPaneContainer = this.viewsService.getActiveViewPaneContainerWithId(VIEWLET_ID);
+		if (viewPaneContainer) {
+			const extensionsViewPaneContainer = viewPaneContainer as IExtensionsViewPaneContainer;
+			extensionsViewPaneContainer.search('');
+			extensionsViewPaneContainer.focus();
+		}
+	}
+}
+
+export class ClearExtensionsInputAction extends ClearExtensionsSearchResultsAction {
 
 	constructor(
 		id: string,
 		label: string,
 		onSearchChange: Event<string>,
 		value: string,
-		@IViewletService private readonly viewletService: IViewletService
+		@IViewsService viewsService: IViewsService
 	) {
-		super(id, label, 'codicon-clear-all', true);
+		super(id, label, viewsService);
 		this.onSearchChange(value);
 		this._register(onSearchChange(this.onSearchChange, this));
 	}
@@ -1662,14 +1693,6 @@ export class ClearExtensionsInputAction extends Action {
 		this.enabled = !!value;
 	}
 
-	run(): Promise<void> {
-		return this.viewletService.openViewlet(VIEWLET_ID, true)
-			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
-			.then(viewlet => {
-				viewlet.search('');
-				viewlet.focus();
-			});
-	}
 }
 
 export class ShowBuiltInExtensionsAction extends Action {
@@ -1735,7 +1758,51 @@ export class ShowPopularExtensionsAction extends Action {
 		return this.viewletService.openViewlet(VIEWLET_ID, true)
 			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
 			.then(viewlet => {
-				viewlet.search('@sort:installs ');
+				viewlet.search('@popular ');
+				viewlet.focus();
+			});
+	}
+}
+
+export class PredefinedExtensionFilterAction extends Action {
+
+	constructor(
+		id: string,
+		label: string,
+		private readonly filter: string,
+		@IViewletService private readonly viewletService: IViewletService
+	) {
+		super(id, label, undefined, true);
+	}
+
+	run(): Promise<void> {
+		return this.viewletService.openViewlet(VIEWLET_ID, true)
+			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
+			.then(viewlet => {
+				viewlet.search(`${this.filter} `);
+				viewlet.focus();
+			});
+	}
+}
+
+export class RecentlyPublishedExtensionsAction extends Action {
+
+	static readonly ID = 'workbench.extensions.action.recentlyPublishedExtensions';
+	static readonly LABEL = localize('recentlyPublishedExtensions', "Recently Published Extensions");
+
+	constructor(
+		id: string,
+		label: string,
+		@IViewletService private readonly viewletService: IViewletService
+	) {
+		super(id, label, undefined, true);
+	}
+
+	run(): Promise<void> {
+		return this.viewletService.openViewlet(VIEWLET_ID, true)
+			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
+			.then(viewlet => {
+				viewlet.search('@sort:publishedDate ');
 				viewlet.focus();
 			});
 	}
@@ -1764,66 +1831,37 @@ export class ShowRecommendedExtensionsAction extends Action {
 	}
 }
 
-export class InstallWorkspaceRecommendedExtensionsAction extends Action {
+export class ShowRecommendedExtensionAction extends Action {
 
-	static readonly ID = 'workbench.extensions.action.installWorkspaceRecommendedExtensions';
-	static readonly LABEL = localize('installWorkspaceRecommendedExtensions', "Install All Workspace Recommended Extensions");
+	static readonly ID = 'workbench.extensions.action.showRecommendedExtension';
+	static readonly LABEL = localize('showRecommendedExtension', "Show Recommended Extension");
 
-	private _recommendations: string[] = [];
-	get recommendations(): string[] { return this._recommendations; }
-	set recommendations(recommendations: string[]) { this._recommendations = recommendations; this.enabled = this._recommendations.length > 0; }
+	private extensionId: string;
 
 	constructor(
-		id: string = InstallWorkspaceRecommendedExtensionsAction.ID,
-		label: string = InstallWorkspaceRecommendedExtensionsAction.LABEL,
-		recommendations: string[],
+		extensionId: string,
 		@IViewletService private readonly viewletService: IViewletService,
-		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IExtensionsWorkbenchService private readonly extensionWorkbenchService: IExtensionsWorkbenchService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@IExtensionManagementServerService private readonly extensionManagementServerService: IExtensionManagementServerService,
-		@IProductService private readonly productService: IProductService,
 	) {
-		super(id, label, 'extension-action');
-		this.recommendations = recommendations;
+		super(ShowRecommendedExtensionAction.ID, ShowRecommendedExtensionAction.LABEL, undefined, false);
+		this.extensionId = extensionId;
 	}
 
 	run(): Promise<any> {
 		return this.viewletService.openViewlet(VIEWLET_ID, true)
 			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
 			.then(viewlet => {
-				viewlet.search('@recommended ');
+				viewlet.search(`@id:${this.extensionId}`);
 				viewlet.focus();
-				const names = this.recommendations;
-				return this.extensionWorkbenchService.queryGallery({ names, source: 'install-all-workspace-recommendations' }, CancellationToken.None).then(pager => {
-					let installPromises: Promise<any>[] = [];
-					let model = new PagedModel(pager);
-					for (let i = 0; i < pager.total; i++) {
-						installPromises.push(model.resolve(i, CancellationToken.None).then(e => this.installExtension(e)));
-					}
-					return Promise.all(installPromises);
-				});
+				return this.extensionWorkbenchService.queryGallery({ names: [this.extensionId], source: 'install-recommendation', pageSize: 1 }, CancellationToken.None)
+					.then(pager => {
+						if (pager && pager.firstPage && pager.firstPage.length) {
+							const extension = pager.firstPage[0];
+							return this.extensionWorkbenchService.open(extension);
+						}
+						return null;
+					});
 			});
-	}
-
-	private async installExtension(extension: IExtension): Promise<void> {
-		try {
-			if (extension.local && extension.gallery) {
-				if (prefersExecuteOnUI(extension.local.manifest, this.productService, this.configurationService)) {
-					if (this.extensionManagementServerService.localExtensionManagementServer) {
-						await this.extensionManagementServerService.localExtensionManagementServer.extensionManagementService.installFromGallery(extension.gallery);
-						return;
-					}
-				} else if (this.extensionManagementServerService.remoteExtensionManagementServer) {
-					await this.extensionManagementServerService.remoteExtensionManagementServer.extensionManagementService.installFromGallery(extension.gallery);
-					return;
-				}
-			}
-			await this.extensionWorkbenchService.install(extension);
-		} catch (err) {
-			console.error(err);
-			return promptDownloadManually(extension.gallery, localize('failedToInstall', "Failed to install \'{0}\'.", extension.identifier.id), err, this.instantiationService);
-		}
 	}
 }
 
@@ -1855,6 +1893,7 @@ export class InstallRecommendedExtensionAction extends Action {
 						if (pager && pager.firstPage && pager.firstPage.length) {
 							const extension = pager.firstPage[0];
 							return this.extensionWorkbenchService.install(extension)
+								.then(() => this.extensionWorkbenchService.open(extension))
 								.then(() => null, err => {
 									console.error(err);
 									return promptDownloadManually(extension.gallery, localize('failedToInstall', "Failed to install \'{0}\'.", extension.identifier.id), err, this.instantiationService);
@@ -1874,7 +1913,7 @@ export class IgnoreExtensionRecommendationAction extends Action {
 
 	constructor(
 		private readonly extension: IExtension,
-		@IExtensionRecommendationsService private readonly extensionsTipsService: IExtensionRecommendationsService,
+		@IExtensionIgnoredRecommendationsService private readonly extensionRecommendationsManagementService: IExtensionIgnoredRecommendationsService,
 	) {
 		super(IgnoreExtensionRecommendationAction.ID, 'Ignore Recommendation');
 
@@ -1884,7 +1923,7 @@ export class IgnoreExtensionRecommendationAction extends Action {
 	}
 
 	public run(): Promise<any> {
-		this.extensionsTipsService.toggleIgnoredRecommendation(this.extension.identifier.id, true);
+		this.extensionRecommendationsManagementService.toggleGlobalIgnoredRecommendation(this.extension.identifier.id, true);
 		return Promise.resolve();
 	}
 }
@@ -1897,7 +1936,7 @@ export class UndoIgnoreExtensionRecommendationAction extends Action {
 
 	constructor(
 		private readonly extension: IExtension,
-		@IExtensionRecommendationsService private readonly extensionsTipsService: IExtensionRecommendationsService,
+		@IExtensionIgnoredRecommendationsService private readonly extensionRecommendationsManagementService: IExtensionIgnoredRecommendationsService,
 	) {
 		super(UndoIgnoreExtensionRecommendationAction.ID, 'Undo');
 
@@ -1907,7 +1946,7 @@ export class UndoIgnoreExtensionRecommendationAction extends Action {
 	}
 
 	public run(): Promise<any> {
-		this.extensionsTipsService.toggleIgnoredRecommendation(this.extension.identifier.id, false);
+		this.extensionRecommendationsManagementService.toggleGlobalIgnoredRecommendation(this.extension.identifier.id, false);
 		return Promise.resolve();
 	}
 }
@@ -1958,26 +1997,35 @@ export class ShowLanguageExtensionsAction extends Action {
 	}
 }
 
-export class ShowAzureExtensionsAction extends Action {
-
-	static readonly ID = 'workbench.extensions.action.showAzureExtensions';
-	static readonly LABEL = localize('showAzureExtensionsShort', "Azure Extensions");
+export class SearchCategoryAction extends Action {
 
 	constructor(
 		id: string,
 		label: string,
+		private readonly category: string,
 		@IViewletService private readonly viewletService: IViewletService
 	) {
 		super(id, label, undefined, true);
 	}
 
 	run(): Promise<void> {
-		return this.viewletService.openViewlet(VIEWLET_ID, true)
-			.then(viewlet => viewlet?.getViewPaneContainer() as IExtensionsViewPaneContainer)
-			.then(viewlet => {
-				viewlet.search('@sort:installs azure ');
-				viewlet.focus();
-			});
+		return new SearchExtensionsAction(`@category:"${this.category.toLowerCase()}"`, this.viewletService).run();
+	}
+}
+
+export class SearchExtensionsAction extends Action {
+
+	constructor(
+		private readonly searchValue: string,
+		@IViewletService private readonly viewletService: IViewletService
+	) {
+		super('extensions.searchExtensions', localize('search recommendations', "Search Extensions"), undefined, true);
+	}
+
+	async run(): Promise<void> {
+		const viewPaneContainer = (await this.viewletService.openViewlet(VIEWLET_ID, true))?.getViewPaneContainer() as IExtensionsViewPaneContainer;
+		viewPaneContainer.search(this.searchValue);
+		viewPaneContainer.focus();
 	}
 }
 
@@ -2636,7 +2684,7 @@ export class MaliciousStatusLabelAction extends ExtensionAction {
 
 	constructor(long: boolean) {
 		const tooltip = localize('malicious tooltip', "This extension was reported to be problematic.");
-		const label = long ? tooltip : localize('malicious', "Malicious");
+		const label = long ? tooltip : localize({ key: 'malicious', comment: ['Refers to a malicious extension'] }, "Malicious");
 		super('extensions.install', label, '', false);
 		this.tooltip = localize('malicious tooltip', "This extension was reported to be problematic.");
 	}
@@ -2664,7 +2712,7 @@ export class SyncIgnoredIconAction extends ExtensionAction {
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 	) {
 		super('extensions.syncignore', '', SyncIgnoredIconAction.DISABLE_CLASS, false);
-		this._register(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectedKeys.includes('sync.ignoredExtensions'))(() => this.update()));
+		this._register(Event.filter(this.configurationService.onDidChangeConfiguration, e => e.affectedKeys.includes('settingsSync.ignoredExtensions'))(() => this.update()));
 		this.update();
 		this.tooltip = localize('syncingore.label', "This extension is ignored during sync.");
 	}
@@ -2861,12 +2909,16 @@ export class DisableAllAction extends Action {
 		this._register(this.extensionsWorkbenchService.onChange(() => this.update()));
 	}
 
+	private getExtensionsToDisable(): IExtension[] {
+		return this.extensionsWorkbenchService.local.filter(e => e.type === ExtensionType.User && !!e.local && this.extensionEnablementService.isEnabled(e.local) && this.extensionEnablementService.canChangeEnablement(e.local));
+	}
+
 	private update(): void {
-		this.enabled = this.extensionsWorkbenchService.local.some(e => e.type === ExtensionType.User && !!e.local && this.extensionEnablementService.isEnabled(e.local) && this.extensionEnablementService.canChangeEnablement(e.local));
+		this.enabled = this.getExtensionsToDisable().length > 0;
 	}
 
 	run(): Promise<any> {
-		return this.extensionsWorkbenchService.setEnablement(this.extensionsWorkbenchService.local.filter(e => e.type === ExtensionType.User), EnablementState.DisabledGlobally);
+		return this.extensionsWorkbenchService.setEnablement(this.getExtensionsToDisable(), EnablementState.DisabledGlobally);
 	}
 }
 
@@ -2887,12 +2939,16 @@ export class DisableAllWorkspaceAction extends Action {
 		this._register(this.extensionsWorkbenchService.onChange(() => this.update(), this));
 	}
 
+	private getExtensionsToDisable(): IExtension[] {
+		return this.extensionsWorkbenchService.local.filter(e => e.type === ExtensionType.User && !!e.local && this.extensionEnablementService.isEnabled(e.local) && this.extensionEnablementService.canChangeEnablement(e.local));
+	}
+
 	private update(): void {
-		this.enabled = this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY && this.extensionsWorkbenchService.local.some(e => e.type === ExtensionType.User && !!e.local && this.extensionEnablementService.isEnabled(e.local) && this.extensionEnablementService.canChangeEnablement(e.local));
+		this.enabled = this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY && this.getExtensionsToDisable().length > 0;
 	}
 
 	run(): Promise<any> {
-		return this.extensionsWorkbenchService.setEnablement(this.extensionsWorkbenchService.local.filter(e => e.type === ExtensionType.User), EnablementState.DisabledWorkspace);
+		return this.extensionsWorkbenchService.setEnablement(this.getExtensionsToDisable(), EnablementState.DisabledWorkspace);
 	}
 }
 
@@ -2911,12 +2967,16 @@ export class EnableAllAction extends Action {
 		this._register(this.extensionsWorkbenchService.onChange(() => this.update()));
 	}
 
+	private getExtensionsToEnable(): IExtension[] {
+		return this.extensionsWorkbenchService.local.filter(e => !!e.local && this.extensionEnablementService.canChangeEnablement(e.local) && !this.extensionEnablementService.isEnabled(e.local));
+	}
+
 	private update(): void {
-		this.enabled = this.extensionsWorkbenchService.local.some(e => !!e.local && this.extensionEnablementService.canChangeEnablement(e.local) && !this.extensionEnablementService.isEnabled(e.local));
+		this.enabled = this.getExtensionsToEnable().length > 0;
 	}
 
 	run(): Promise<any> {
-		return this.extensionsWorkbenchService.setEnablement(this.extensionsWorkbenchService.local, EnablementState.EnabledGlobally);
+		return this.extensionsWorkbenchService.setEnablement(this.getExtensionsToEnable(), EnablementState.EnabledGlobally);
 	}
 }
 
@@ -2937,12 +2997,16 @@ export class EnableAllWorkspaceAction extends Action {
 		this._register(this.workspaceContextService.onDidChangeWorkbenchState(() => this.update(), this));
 	}
 
+	private getExtensionsToEnable(): IExtension[] {
+		return this.extensionsWorkbenchService.local.filter(e => !!e.local && this.extensionEnablementService.canChangeEnablement(e.local) && !this.extensionEnablementService.isEnabled(e.local));
+	}
+
 	private update(): void {
-		this.enabled = this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY && this.extensionsWorkbenchService.local.some(e => !!e.local && this.extensionEnablementService.canChangeEnablement(e.local) && !this.extensionEnablementService.isEnabled(e.local));
+		this.enabled = this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY && this.getExtensionsToEnable().length > 0;
 	}
 
 	run(): Promise<any> {
-		return this.extensionsWorkbenchService.setEnablement(this.extensionsWorkbenchService.local, EnablementState.EnabledWorkspace);
+		return this.extensionsWorkbenchService.setEnablement(this.getExtensionsToEnable(), EnablementState.EnabledWorkspace);
 	}
 }
 
@@ -3374,7 +3438,7 @@ registerThemingParticipant((theme: IColorTheme, collector: ICssStyleCollector) =
 
 	const contrastBorderColor = theme.getColor(contrastBorder);
 	if (contrastBorderColor) {
-		collector.addRule(`.extension-list-item .monaco-action-bar .action-item .action-label.extension-action { border: 1px solid ${contrastBorderColor}; }`);
-		collector.addRule(`.extension-editor .monaco-action-bar .action-item .action-label.extension-action { border: 1px solid ${contrastBorderColor}; }`);
+		collector.addRule(`.extension-list-item .monaco-action-bar .action-item .action-label.extension-action:not(.disabled) { border: 1px solid ${contrastBorderColor}; }`);
+		collector.addRule(`.extension-editor .monaco-action-bar .action-item .action-label.extension-action:not(.disabled) { border: 1px solid ${contrastBorderColor}; }`);
 	}
 });

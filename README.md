@@ -12,7 +12,7 @@ The goal of this fork is to make a version of vscode that can have fully working
 ### Build
 1. navigate to the project `cd vscode`
 2. install dependencies with `yarn`
-3. build project: `yarn watch`
+3. build project: `yarn watch`, (use `yarn compile` instead if this creates too many file watchers)
 
 ### Running
 - Linux / macOS: `./scripts/code.sh --enable-transparent-visuals`

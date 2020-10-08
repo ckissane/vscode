@@ -50,8 +50,13 @@
 	outline-offset: -2px;
 }
 
-.monaco-workbench .part.panel > .title > .panel-switcher-container > .monaco-action-bar .action-item.clicked:focus .action-label {
+.monaco-workbench .part.panel > .title > .panel-switcher-container > .monaco-action-bar .action-item.clicked:not(.checked):focus .action-label {
 	border-bottom-color: transparent !important; /* hides border on clicked state */
+}
+
+.monaco-workbench .part.panel > .title > .panel-switcher-container > .monaco-action-bar .action-item.checked.clicked:focus .action-label,
+.monaco-workbench .part.panel > .title > .panel-switcher-container > .monaco-action-bar .action-item.checked.active:focus .action-label {
+	border-bottom-color: currentColor !important;
 }
 
 /** Panel Switcher */
@@ -158,6 +163,8 @@
 
 .monaco-workbench .part.panel > .composite.title> .panel-switcher-container > .monaco-action-bar .badge {
 	margin-left: 8px;
+	display: flex;
+	align-items: center;
 }
 
 .monaco-workbench .part.panel > .composite.title> .panel-switcher-container > .monaco-action-bar .badge .badge-content {
@@ -165,25 +172,13 @@
 	border-radius: 11px;
 	font-size: 11px;
 	min-width: 18px;
-	min-height: 18px;
+	height: 18px;
 	line-height: 11px;
 	font-weight: normal;
 	text-align: center;
 	display: inline-block;
 	box-sizing: border-box;
-	}
-
-/** Actions */
-
-.monaco-workbench .panel .monaco-action-bar .action-item.select-container {
-	cursor: default;
-}
-
-.monaco-workbench .panel .monaco-action-bar .action-item .monaco-select-box {
-	cursor: pointer;
-	min-width: 110px;
-	min-height: 18px;
-	padding: 2px 23px 2px 8px;
+	position: relative;
 }
 
 /* Rotate icons when panel is on right */

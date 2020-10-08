@@ -139,18 +139,28 @@ function findGitWin32(onLookup: (path: string) => void): Promise<IGit> {
 		.then(undefined, () => findGitWin32InPath(onLookup));
 }
 
-export function findGit(hint: string | undefined, onLookup: (path: string) => void): Promise<IGit> {
-	const first = hint ? findSpecificGit(hint, onLookup) : Promise.reject<IGit>(null);
+export async function findGit(hint: string | string[] | undefined, onLookup: (path: string) => void): Promise<IGit> {
+	const hints = Array.isArray(hint) ? hint : hint ? [hint] : [];
 
-	return first
-		.then(undefined, () => {
-			switch (process.platform) {
-				case 'darwin': return findGitDarwin(onLookup);
-				case 'win32': return findGitWin32(onLookup);
-				default: return findSpecificGit('git', onLookup);
-			}
-		})
-		.then(null, () => Promise.reject(new Error('Git installation not found.')));
+	for (const hint of hints) {
+		try {
+			return await findSpecificGit(hint, onLookup);
+		} catch {
+			// noop
+		}
+	}
+
+	try {
+		switch (process.platform) {
+			case 'darwin': return await findGitDarwin(onLookup);
+			case 'win32': return await findGitWin32(onLookup);
+			default: return await findSpecificGit('git', onLookup);
+		}
+	} catch {
+		// noop
+	}
+
+	throw new Error('Git installation not found.');
 }
 
 export interface IExecutionResult<T extends string | Buffer> {
@@ -419,7 +429,7 @@ export class Git {
 	}
 
 	async getRepositoryRoot(repositoryPath: string): Promise<string> {
-		const result = await this.exec(repositoryPath, ['rev-parse', '--show-toplevel']);
+		const result = await this.exec(repositoryPath, ['rev-parse', '--show-toplevel'], { log: false });
 
 		// Keep trailing spaces which are part of the directory name
 		const repoPath = path.normalize(result.stdout.trimLeft().replace(/[\r\n]+$/, ''));
@@ -435,10 +445,9 @@ export class Git {
 					const [, letter] = match;
 
 					try {
-						const networkPath = await new Promise<string>(resolve =>
+						const networkPath = await new Promise<string | undefined>(resolve =>
 							realpath.native(`${letter}:`, { encoding: 'utf8' }, (err, resolvedPath) =>
-								// eslint-disable-next-line eqeqeq
-								resolve(err != null ? undefined : resolvedPath),
+								resolve(err !== null ? undefined : resolvedPath),
 							),
 						);
 						if (networkPath !== undefined) {
@@ -1323,8 +1332,13 @@ export class Repository {
 		if (opts.signCommit) {
 			args.push('-S');
 		}
+
 		if (opts.empty) {
 			args.push('--allow-empty');
+		}
+
+		if (opts.noVerify) {
+			args.push('--no-verify');
 		}
 
 		try {
@@ -1628,6 +1642,8 @@ export class Repository {
 				err.gitErrorCode = GitErrorCodes.RemoteConnectionError;
 			} else if (/^fatal: The current branch .* has no upstream branch/.test(err.stderr || '')) {
 				err.gitErrorCode = GitErrorCodes.NoUpstreamBranch;
+			} else if (/Permission.*denied/.test(err.stderr || '')) {
+				err.gitErrorCode = GitErrorCodes.PermissionDenied;
 			}
 
 			throw err;
@@ -1871,7 +1887,7 @@ export class Repository {
 				remote.pushUrl = url;
 			}
 
-			// https://github.com/Microsoft/vscode/issues/45271
+			// https://github.com/microsoft/vscode/issues/45271
 			remote.isReadOnly = remote.pushUrl === undefined || remote.pushUrl === 'no_push';
 		}
 
@@ -1937,6 +1953,17 @@ export class Repository {
 	// TODO: Support core.commentChar
 	stripCommitMessageComments(message: string): string {
 		return message.replace(/^\s*#.*$\n?/gm, '').trim();
+	}
+
+	async getSquashMessage(): Promise<string | undefined> {
+		const squashMsgPath = path.join(this.repositoryRoot, '.git', 'SQUASH_MSG');
+
+		try {
+			const raw = await fs.readFile(squashMsgPath, 'utf8');
+			return this.stripCommitMessageComments(raw);
+		} catch {
+			return undefined;
+		}
 	}
 
 	async getMergeMessage(): Promise<string | undefined> {

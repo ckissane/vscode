@@ -22,7 +22,8 @@
 		"terminal.background": "#00000000",
 		"terminal.ansiBlack": "00000030",
 		"sideBarSectionHeader.background": "#0000",
-		"sideBarSectionHeader.border": "#ccc3"
+		"sideBarSectionHeader.border": "#ccc3",
+		"tab.lastPinnedBorder": "#ccc3"
 	},
 	"semanticHighlighting": true
 }

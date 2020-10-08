@@ -4,7 +4,8 @@
   "description": "%description%",
   "extensionKind": [
     "ui",
-    "workspace"
+    "workspace",
+    "web"
   ],
   "version": "1.0.0",
   "publisher": "vscode",
@@ -16,7 +17,7 @@
     "vscode": "^1.39.0"
   },
   "main": "./out/extension",
-  "browser": "./dist/extension.js",
+  "browser": "./dist/browser/extension.js",
   "categories": [
     "Other"
   ],

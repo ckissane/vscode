@@ -26,7 +26,7 @@ import { CompositeBar, ICompositeBarItem, CompositeDragAndDrop } from 'vs/workbe
 import { ToggleCompositePinnedAction } from 'vs/workbench/browser/parts/compositeBarActions';
 import { IBadge } from 'vs/workbench/services/activity/common/activity';
 import { INotificationService } from 'vs/platform/notification/common/notification';
-import { Dimension, trackFocus, addClass, toggleClass, EventHelper } from 'vs/base/browser/dom';
+import { Dimension, trackFocus, EventHelper } from 'vs/base/browser/dom';
 import { localize } from 'vs/nls';
 import { IDisposable, DisposableStore } from 'vs/base/common/lifecycle';
 import { IContextKey, IContextKeyService, ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
@@ -422,10 +422,10 @@ export class PanelPart extends CompositePart<Panel> implements IPanelService {
 	private createEmptyPanelMessage(): void {
 		const contentArea = this.getContentArea()!;
 		this.emptyPanelMessageElement = document.createElement('div');
-		addClass(this.emptyPanelMessageElement, 'empty-panel-message-area');
+		this.emptyPanelMessageElement.classList.add('empty-panel-message-area');
 
 		const messageElement = document.createElement('div');
-		addClass(messageElement, 'empty-panel-message');
+		messageElement.classList.add('empty-panel-message');
 		messageElement.innerText = localize('panel.emptyMessage', "Drag a view into the panel to display.");
 
 		this.emptyPanelMessageElement.appendChild(messageElement);
@@ -533,7 +533,7 @@ export class PanelPart extends CompositePart<Panel> implements IPanelService {
 	getPinnedPanels(): readonly PanelDescriptor[] {
 		const pinnedCompositeIds = this.compositeBar.getPinnedComposites().map(c => c.id);
 		return this.getPanels()
-			.filter(p => pinnedCompositeIds.indexOf(p.id) !== -1)
+			.filter(p => pinnedCompositeIds.includes(p.id))
 			.sort((p1, p2) => pinnedCompositeIds.indexOf(p1.id) - pinnedCompositeIds.indexOf(p2.id));
 	}
 
@@ -613,7 +613,7 @@ export class PanelPart extends CompositePart<Panel> implements IPanelService {
 	private emptyPanelMessageElement: HTMLElement | undefined;
 	private layoutEmptyMessage(): void {
 		if (this.emptyPanelMessageElement) {
-			toggleClass(this.emptyPanelMessageElement, 'visible', this.compositeBar.getVisibleComposites().length === 0);
+			this.emptyPanelMessageElement.classList.toggle('visible', this.compositeBar.getVisibleComposites().length === 0);
 		}
 	}
 
